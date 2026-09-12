@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use note_vault::{load_note_decrypted, save_note_encrypted, Note};
+use rayon::prelude::*;
 use slint::Model;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -264,6 +265,195 @@ fn load_note_into_ui(
     }
 }
 
+/// Reloads and re-decrypts all notes in the vault in parallel using Rayon,
+/// displaying the progress modal popup and refreshing models upon completion.
+fn trigger_vault_reload(
+    password: Zeroizing<String>,
+    window_weak: slint::Weak<MainWindow>,
+    vault_dir: Arc<PathBuf>,
+    meta_store: Arc<Mutex<HashMap<String, NoteMetaSummary>>>,
+    session_pass: Arc<Mutex<Option<Zeroizing<String>>>>,
+    a_folder: Arc<Mutex<String>>,
+    s_query: Arc<Mutex<String>>,
+    is_initial_unlock: bool,
+) {
+    let Some(ui) = window_weak.upgrade() else { return };
+
+    // Reset UI state and show loading progress popup
+    ui.set_is_loading(true);
+    ui.set_loading_progress(0.0);
+    ui.set_loading_status_text("Discovering encrypted notes...".into());
+    ui.set_active_note_id("".into());
+    ui.set_note_title("".into());
+    ui.set_note_content("".into());
+    ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
+    ui.set_note_date("".into());
+    ui.set_has_unsaved_changes(false);
+
+    let weak = window_weak.clone();
+
+    thread::spawn(move || {
+        let mut vault_files: Vec<PathBuf> = Vec::new();
+        for entry in WalkDir::new(&*vault_dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let p = entry.path();
+            if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("vault") {
+                vault_files.push(p.to_path_buf());
+            }
+        }
+
+        let total_files = vault_files.len();
+
+        if total_files == 0 {
+            // Empty vault: store password in session, clear meta store and unlock
+            *session_pass.lock().unwrap() = Some(password);
+            meta_store.lock().unwrap().clear();
+
+            let weak = weak.clone();
+            let v_path = Arc::clone(&vault_dir);
+            let m_store = Arc::clone(&meta_store);
+            let af = Arc::clone(&a_folder);
+            let sq = Arc::clone(&s_query);
+            slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_is_loading(false);
+                    ui.set_is_locked(false);
+                    ui.set_unlock_error_message("".into());
+                    refresh_models(&ui, &v_path, &m_store, &af, &sq);
+                    ui.set_note_content("".into());
+                }
+            })
+            .ok();
+            return;
+        }
+
+        let completed_count = Arc::new(AtomicUsize::new(0));
+        let decrypt_failed = Arc::new(AtomicBool::new(false));
+
+        let decrypted_items: Vec<(String, NoteMetaSummary)> = vault_files
+            .into_par_iter()
+            .filter_map(|file_path| {
+                if decrypt_failed.load(Ordering::Relaxed) {
+                    return None;
+                }
+
+                // Determine category from relative subdirectory path (root level folder only)
+                let category_name = match file_path
+                    .parent()
+                    .and_then(|p| p.strip_prefix(&*vault_dir).ok())
+                {
+                    Some(rel) if !rel.as_os_str().is_empty() => {
+                        let rel_clean = rel.to_string_lossy().replace('\\', "/");
+                        rel_clean.split('/').next().unwrap_or("General").to_string()
+                    }
+                    _ => "General".to_string(),
+                };
+
+                let item = match load_note_decrypted(&password, &file_path) {
+                    Ok(mut note) => {
+                        let note_id = note.id.to_string();
+                        let title = if note.title.is_empty() {
+                            file_path
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("Untitled")
+                                .to_string()
+                        } else {
+                            note.title.clone()
+                        };
+                        let tags = note.tags.clone();
+                        let date = format_unix_timestamp(note.updated_at);
+                        let updated_at = note.updated_at;
+
+                        let summary = NoteMetaSummary {
+                            title,
+                            category: category_name,
+                            tags,
+                            date,
+                            updated_at,
+                            file_path: file_path.clone(),
+                        };
+
+                        note.zeroize();
+                        Some((note_id, summary))
+                    }
+                    Err(_) => {
+                        decrypt_failed.store(true, Ordering::Relaxed);
+                        None
+                    }
+                };
+
+                let done = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                let progress = (done as f32) / (total_files as f32);
+                let status_msg = format!("Decrypting note {} of {}...", done, total_files);
+                let weak_ui = weak.clone();
+
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak_ui.upgrade() {
+                        ui.set_loading_progress(progress);
+                        ui.set_loading_status_text(status_msg.into());
+                    }
+                })
+                .ok();
+
+                item
+            })
+            .collect();
+
+        if decrypt_failed.load(Ordering::Relaxed) {
+            if is_initial_unlock {
+                *session_pass.lock().unwrap() = None;
+            }
+            let weak_ui = weak.clone();
+            slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak_ui.upgrade() {
+                    ui.set_is_loading(false);
+                    if is_initial_unlock {
+                        ui.set_unlock_error_message(
+                            "Decryption failed: invalid master password or corrupted note file.".into(),
+                        );
+                    } else {
+                        ui.set_vault_status_text("Error: Decryption failed during refresh.".into());
+                    }
+                }
+            })
+            .ok();
+            return;
+        }
+
+        // Update persistent metadata store by completely replacing with reloaded notes
+        {
+            let mut store = meta_store.lock().unwrap();
+            store.clear();
+            store.extend(decrypted_items);
+        }
+
+        // Store verified master password in the active vault session
+        *session_pass.lock().unwrap() = Some(password);
+
+        // Dispatch UI model population to main event loop thread
+        let weak_ui = weak.clone();
+        let v_path = Arc::clone(&vault_dir);
+        let m_store = Arc::clone(&meta_store);
+        let af = Arc::clone(&a_folder);
+        let sq = Arc::clone(&s_query);
+        slint::invoke_from_event_loop(move || {
+            let Some(ui) = weak_ui.upgrade() else { return };
+
+            ui.set_loading_progress(1.0);
+            ui.set_is_loading(false);
+            ui.set_is_locked(false);
+            ui.set_unlock_error_message("".into());
+            refresh_models(&ui, &v_path, &m_store, &af, &sq);
+            ui.set_note_content("".into());
+        })
+        .ok();
+    });
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments with clap
     let args = Args::parse();
@@ -373,176 +563,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Clear password field in UI to avoid plaintext lingering in memory
             ui.set_unlock_password("".into());
             ui.set_unlock_error_message("".into());
-            ui.set_is_loading(true);
-            ui.set_loading_progress(0.0);
-            ui.set_loading_status_text("Discovering encrypted notes...".into());
 
-            let weak = window_weak.clone();
-            let vault_dir = Arc::clone(&vault_path);
-            let meta_store = Arc::clone(&metadata_store);
-            let session_pass = Arc::clone(&session_password);
-            let a_folder = Arc::clone(&active_folder);
-            let s_query = Arc::clone(&search_query);
-
-            // Execute recursive loading and Argon2id decryption on a worker thread
-            thread::spawn(move || {
-                let mut vault_files: Vec<PathBuf> = Vec::new();
-                for entry in WalkDir::new(&*vault_dir)
-                    .follow_links(false)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                {
-                    let p = entry.path();
-                    if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("vault") {
-                        vault_files.push(p.to_path_buf());
-                    }
-                }
-
-                let total_files = vault_files.len();
-
-                if total_files == 0 {
-                    // Empty vault: store password in session and unlock
-                    *session_pass.lock().unwrap() = Some(password);
-
-                    let weak = weak.clone();
-                    let v_path = Arc::clone(&vault_dir);
-                    let m_store = Arc::clone(&meta_store);
-                    let af = Arc::clone(&a_folder);
-                    let sq = Arc::clone(&s_query);
-                    slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = weak.upgrade() {
-                            ui.set_is_loading(false);
-                            ui.set_is_locked(false);
-                            ui.set_unlock_error_message("".into());
-                            refresh_models(&ui, &v_path, &m_store, &af, &sq);
-                            ui.set_note_content("".into());
-                        }
-                    })
-                    .ok();
-                    return;
-                }
-
-                use rayon::prelude::*;
-
-                let completed_count = Arc::new(AtomicUsize::new(0));
-                let decrypt_failed = Arc::new(AtomicBool::new(false));
-
-                let decrypted_items: Vec<(String, NoteMetaSummary)> = vault_files
-                    .into_par_iter()
-                    .filter_map(|file_path| {
-                        if decrypt_failed.load(Ordering::Relaxed) {
-                            return None;
-                        }
-
-                        // Determine category from relative subdirectory path (root level folder only)
-                        let category_name = match file_path
-                            .parent()
-                            .and_then(|p| p.strip_prefix(&*vault_dir).ok())
-                        {
-                            Some(rel) if !rel.as_os_str().is_empty() => {
-                                let rel_clean = rel.to_string_lossy().replace('\\', "/");
-                                rel_clean.split('/').next().unwrap_or("General").to_string()
-                            }
-                            _ => "General".to_string(),
-                        };
-
-                        let item = match load_note_decrypted(&password, &file_path) {
-                            Ok(mut note) => {
-                                let note_id = note.id.to_string();
-                                let title = if note.title.is_empty() {
-                                    file_path
-                                        .file_stem()
-                                        .and_then(|s| s.to_str())
-                                        .unwrap_or("Untitled")
-                                        .to_string()
-                                } else {
-                                    note.title.clone()
-                                };
-                                let tags = note.tags.clone();
-                                let date = format_unix_timestamp(note.updated_at);
-                                let updated_at = note.updated_at;
-
-                                let summary = NoteMetaSummary {
-                                    title,
-                                    category: category_name,
-                                    tags,
-                                    date,
-                                    updated_at,
-                                    file_path: file_path.clone(),
-                                };
-
-                                note.zeroize();
-                                Some((note_id, summary))
-                            }
-                            Err(_) => {
-                                decrypt_failed.store(true, Ordering::Relaxed);
-                                None
-                            }
-                        };
-
-                        let done = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
-                        let progress = (done as f32) / (total_files as f32);
-                        let status_msg = format!("Decrypting note {} of {}...", done, total_files);
-                        let weak_ui = weak.clone();
-
-                        slint::invoke_from_event_loop(move || {
-                            if let Some(ui) = weak_ui.upgrade() {
-                                ui.set_loading_progress(progress);
-                                ui.set_loading_status_text(status_msg.into());
-                            }
-                        })
-                        .ok();
-
-                        item
-                    })
-                    .collect();
-
-                if decrypt_failed.load(Ordering::Relaxed) {
-                    *session_pass.lock().unwrap() = None;
-                    let weak_ui = weak.clone();
-                    slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = weak_ui.upgrade() {
-                            ui.set_is_loading(false);
-                            ui.set_unlock_error_message(
-                                "Decryption failed: invalid master password or corrupted note file.".into(),
-                            );
-                        }
-                    })
-                    .ok();
-                    return;
-                }
-
-                let mut local_meta_map: HashMap<String, NoteMetaSummary> = HashMap::new();
-                local_meta_map.extend(decrypted_items);
-
-                // Update persistent metadata store
-                {
-                    let mut store = meta_store.lock().unwrap();
-                    store.clear();
-                    store.extend(local_meta_map);
-                }
-
-                // Store verified master password in the active vault session
-                *session_pass.lock().unwrap() = Some(password);
-
-                // Dispatch UI model population to main event loop thread
-                let weak_ui = weak.clone();
-                let v_path = Arc::clone(&vault_dir);
-                let m_store = Arc::clone(&meta_store);
-                let af = Arc::clone(&a_folder);
-                let sq = Arc::clone(&s_query);
-                slint::invoke_from_event_loop(move || {
-                    let Some(ui) = weak_ui.upgrade() else { return };
-
-                    ui.set_loading_progress(1.0);
-                    ui.set_is_loading(false);
-                    ui.set_is_locked(false);
-                    refresh_models(&ui, &v_path, &m_store, &af, &sq);
-
-                    ui.set_note_content("".into());
-                })
-                .ok();
-            });
+            trigger_vault_reload(
+                password,
+                window_weak.clone(),
+                Arc::clone(&vault_path),
+                Arc::clone(&metadata_store),
+                Arc::clone(&session_password),
+                Arc::clone(&active_folder),
+                Arc::clone(&search_query),
+                true,
+            );
         }
     });
 
@@ -622,6 +653,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui.set_new_folder_name("".into());
                     ui.set_show_folder_modal(true);
                 }
+                "rescan_vault" => {
+                    let password_opt = session_password.lock().unwrap().clone();
+                    if let Some(password) = password_opt {
+                        trigger_vault_reload(
+                            password,
+                            window_weak.clone(),
+                            Arc::clone(&vault_path),
+                            Arc::clone(&metadata_store),
+                            Arc::clone(&session_password),
+                            Arc::clone(&active_folder),
+                            Arc::clone(&search_query),
+                            false,
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -634,12 +680,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         let vault_path = Arc::clone(&vault_path);
         let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
         move || {
-            let Some(ui) = window_weak.upgrade() else { return };
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            let password_opt = session_password.lock().unwrap().clone();
+            if let Some(password) = password_opt {
+                trigger_vault_reload(
+                    password,
+                    window_weak.clone(),
+                    Arc::clone(&vault_path),
+                    Arc::clone(&metadata_store),
+                    Arc::clone(&session_password),
+                    Arc::clone(&active_folder),
+                    Arc::clone(&search_query),
+                    false,
+                );
+            }
         }
     });
 
