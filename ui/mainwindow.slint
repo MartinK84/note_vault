@@ -35,7 +35,8 @@ export component MainWindow inherits Window {
     // --- Unsaved Changes Tracking ---
     in-out property <bool> has_unsaved_changes: false;
     in-out property <bool> show_unsaved_warning: false;
-    in-out property <string> pending_note_id: "";
+    in-out property <string> pending_action_type: "";
+    in-out property <string> pending_action_payload: "";
 
     // --- Search Query ---
     in-out property <string> search_query: "";
@@ -79,6 +80,7 @@ export component MainWindow inherits Window {
     callback save_note_requested(string, string, string); // title, content, category
     callback select_note_requested(string); // note_id
     callback discard_changes_confirmed();
+    callback rescan_vault_requested();
     callback folder_selected(string); // folder name
     callback new_note_requested();
     callback new_folder_requested();
@@ -160,11 +162,26 @@ export component MainWindow inherits Window {
                             Button {
                                 height: 28px;
                                 width: 34px;
+                                text: "🔄";
+                                clicked => {
+                                    root.rescan_vault_requested();
+                                }
+                            }
+
+                            Button {
+                                height: 28px;
+                                width: 34px;
                                 text: "+";
                                 clicked => {
-                                    root.new_folder_name = "";
-                                    root.show_folder_modal = true;
-                                    root.new_folder_requested();
+                                    if root.has_unsaved_changes {
+                                        root.pending_action_type = "new_folder";
+                                        root.pending_action_payload = "";
+                                        root.show_unsaved_warning = true;
+                                    } else {
+                                        root.new_folder_name = "";
+                                        root.show_folder_modal = true;
+                                        root.new_folder_requested();
+                                    }
                                 }
                             }
 
@@ -286,8 +303,17 @@ export component MainWindow inherits Window {
 
                             folder_touch := TouchArea {
                                 clicked => {
-                                    root.active_folder = folder;
-                                    root.folder_selected(folder);
+                                    if root.active_folder == folder {
+                                        return;
+                                    }
+                                    if root.has_unsaved_changes {
+                                        root.pending_action_type = "select_folder";
+                                        root.pending_action_payload = folder;
+                                        root.show_unsaved_warning = true;
+                                    } else {
+                                        root.active_folder = folder;
+                                        root.folder_selected(folder);
+                                    }
                                 }
                                 pointer-event(event) => {
                                     if event.button == PointerEventButton.right {
@@ -411,7 +437,13 @@ export component MainWindow inherits Window {
                             width: 34px;
                             text: "+";
                             clicked => {
-                                root.new_note_requested();
+                                if root.has_unsaved_changes {
+                                    root.pending_action_type = "new_note";
+                                    root.pending_action_payload = "";
+                                    root.show_unsaved_warning = true;
+                                } else {
+                                    root.new_note_requested();
+                                }
                             }
                         }
                     }
@@ -526,7 +558,16 @@ export component MainWindow inherits Window {
 
                             card_touch := TouchArea {
                                 clicked => {
-                                    root.select_note_requested(note.id);
+                                    if root.active_note_id == note.id {
+                                        return;
+                                    }
+                                    if root.has_unsaved_changes {
+                                        root.pending_action_type = "select_note";
+                                        root.pending_action_payload = note.id;
+                                        root.show_unsaved_warning = true;
+                                    } else {
+                                        root.select_note_requested(note.id);
+                                    }
                                 }
                                 pointer-event(event) => {
                                     if event.button == PointerEventButton.right {
@@ -1354,6 +1395,8 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                         clicked => {
                             root.show_unsaved_warning = false;
+                            root.pending_action_type = "";
+                            root.pending_action_payload = "";
                         }
                     }
 

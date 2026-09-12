@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -104,7 +105,6 @@ fn refresh_models(
 ) {
     // 1. Scan for flat root directories under vault_path
     let mut folder_set = std::collections::BTreeSet::new();
-    folder_set.insert("General".to_string());
 
     for entry in WalkDir::new(vault_path)
         .min_depth(1)
@@ -140,7 +140,7 @@ fn refresh_models(
     let current_active_folder = {
         let mut active = active_folder.lock().unwrap();
         if active.is_empty() || !folders_list.contains(&*active) {
-            *active = folders_list.first().cloned().unwrap_or_else(|| "General".to_string());
+            *active = folders_list.first().cloned().unwrap_or_default();
         }
         active.clone()
     };
@@ -422,82 +422,98 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
 
-                let mut local_meta_map: HashMap<String, NoteMetaSummary> = HashMap::new();
+                use rayon::prelude::*;
 
-                for (idx, file_path) in vault_files.iter().enumerate() {
-                    let progress = (idx as f32) / (total_files as f32);
-                    let status_msg = format!("Decrypting note {} of {}...", idx + 1, total_files);
-                    let weak_ui = weak.clone();
+                let completed_count = Arc::new(AtomicUsize::new(0));
+                let decrypt_failed = Arc::new(AtomicBool::new(false));
 
-                    slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = weak_ui.upgrade() {
-                            ui.set_loading_progress(progress);
-                            ui.set_loading_status_text(status_msg.into());
+                let decrypted_items: Vec<(String, NoteMetaSummary)> = vault_files
+                    .into_par_iter()
+                    .filter_map(|file_path| {
+                        if decrypt_failed.load(Ordering::Relaxed) {
+                            return None;
                         }
-                    })
-                    .ok();
 
-                    // Determine category from relative subdirectory path (root level folder only)
-                    let category_name = match file_path
-                        .parent()
-                        .and_then(|p| p.strip_prefix(&*vault_dir).ok())
-                    {
-                        Some(rel) if !rel.as_os_str().is_empty() => {
-                            let rel_clean = rel.to_string_lossy().replace('\\', "/");
-                            rel_clean.split('/').next().unwrap_or("General").to_string()
-                        }
-                        _ => "General".to_string(),
-                    };
+                        // Determine category from relative subdirectory path (root level folder only)
+                        let category_name = match file_path
+                            .parent()
+                            .and_then(|p| p.strip_prefix(&*vault_dir).ok())
+                        {
+                            Some(rel) if !rel.as_os_str().is_empty() => {
+                                let rel_clean = rel.to_string_lossy().replace('\\', "/");
+                                rel_clean.split('/').next().unwrap_or("General").to_string()
+                            }
+                            _ => "General".to_string(),
+                        };
 
-                    // Decrypt note file using existing cryptographic loader
-                    match load_note_decrypted(&password, file_path) {
-                        Ok(mut note) => {
-                            let note_id = note.id.to_string();
-                            let title = if note.title.is_empty() {
-                                file_path
-                                    .file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("Untitled")
-                                    .to_string()
-                            } else {
-                                note.title.clone()
-                            };
-                            let tags = note.tags.clone();
-                            let date = format_unix_timestamp(note.updated_at);
-                            let updated_at = note.updated_at;
+                        let item = match load_note_decrypted(&password, &file_path) {
+                            Ok(mut note) => {
+                                let note_id = note.id.to_string();
+                                let title = if note.title.is_empty() {
+                                    file_path
+                                        .file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("Untitled")
+                                        .to_string()
+                                } else {
+                                    note.title.clone()
+                                };
+                                let tags = note.tags.clone();
+                                let date = format_unix_timestamp(note.updated_at);
+                                let updated_at = note.updated_at;
 
-                            local_meta_map.insert(
-                                note_id,
-                                NoteMetaSummary {
+                                let summary = NoteMetaSummary {
                                     title,
                                     category: category_name,
                                     tags,
                                     date,
                                     updated_at,
                                     file_path: file_path.clone(),
-                                },
-                            );
+                                };
 
-                            // Zeroize decrypted note
-                            note.zeroize();
+                                note.zeroize();
+                                Some((note_id, summary))
+                            }
+                            Err(_) => {
+                                decrypt_failed.store(true, Ordering::Relaxed);
+                                None
+                            }
+                        };
+
+                        let done = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        let progress = (done as f32) / (total_files as f32);
+                        let status_msg = format!("Decrypting note {} of {}...", done, total_files);
+                        let weak_ui = weak.clone();
+
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_ui.upgrade() {
+                                ui.set_loading_progress(progress);
+                                ui.set_loading_status_text(status_msg.into());
+                            }
+                        })
+                        .ok();
+
+                        item
+                    })
+                    .collect();
+
+                if decrypt_failed.load(Ordering::Relaxed) {
+                    *session_pass.lock().unwrap() = None;
+                    let weak_ui = weak.clone();
+                    slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak_ui.upgrade() {
+                            ui.set_is_loading(false);
+                            ui.set_unlock_error_message(
+                                "Decryption failed: invalid master password or corrupted note file.".into(),
+                            );
                         }
-                        Err(_) => {
-                            // On decryption failure, abort unlock
-                            *session_pass.lock().unwrap() = None;
-                            let weak_ui = weak.clone();
-                            slint::invoke_from_event_loop(move || {
-                                if let Some(ui) = weak_ui.upgrade() {
-                                    ui.set_is_loading(false);
-                                    ui.set_unlock_error_message(
-                                        "Decryption failed: invalid master password or corrupted note file.".into(),
-                                    );
-                                }
-                            })
-                            .ok();
-                            return;
-                        }
-                    }
+                    })
+                    .ok();
+                    return;
                 }
+
+                let mut local_meta_map: HashMap<String, NoteMetaSummary> = HashMap::new();
+                local_meta_map.extend(decrypted_items);
 
                 // Update persistent metadata store
                 {
@@ -542,7 +558,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Some(ui) = window_weak.upgrade() else { return };
 
             if ui.get_has_unsaved_changes() {
-                ui.set_pending_note_id(note_id);
+                ui.set_pending_action_type("select_note".into());
+                ui.set_pending_action_payload(note_id);
                 ui.set_show_unsaved_warning(true);
             } else {
                 load_note_into_ui(&ui, note_id.as_str(), &metadata_store, &session_password);
@@ -555,20 +572,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_discard_changes_confirmed({
         let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let active_folder = Arc::clone(&active_folder);
+        let search_query = Arc::clone(&search_query);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
-            ui.set_show_unsaved_warning(false);
+            let action_type = ui.get_pending_action_type().to_string();
+            let payload = ui.get_pending_action_payload().to_string();
+
+            ui.set_pending_action_type("".into());
+            ui.set_pending_action_payload("".into());
             ui.set_has_unsaved_changes(false);
-            let pending_id = ui.get_pending_note_id();
-            load_note_into_ui(
-                &ui,
-                pending_id.as_str(),
-                &metadata_store,
-                &session_password,
-            );
+            ui.set_show_unsaved_warning(false);
+
+            match action_type.as_str() {
+                "select_note" => {
+                    load_note_into_ui(
+                        &ui,
+                        payload.as_str(),
+                        &metadata_store,
+                        &session_password,
+                    );
+                }
+                "select_folder" => {
+                    *active_folder.lock().unwrap() = payload.clone();
+                    ui.set_active_folder(payload.clone().into());
+                    ui.set_note_category(payload.into());
+                    ui.set_active_note_id("".into());
+                    ui.set_note_title("".into());
+                    ui.set_note_content("".into());
+                    ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
+                    ui.set_note_date("".into());
+                    refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+                }
+                "new_note" => {
+                    let cur_folder = active_folder.lock().unwrap().clone();
+                    ui.set_active_note_id("new".into());
+                    ui.set_note_title("Untitled Note".into());
+                    ui.set_note_category(cur_folder.into());
+                    ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
+                    ui.set_note_date("Just now".into());
+                    ui.set_note_content("".into());
+                    ui.set_has_unsaved_changes(false);
+                }
+                "new_folder" => {
+                    ui.set_new_folder_name("".into());
+                    ui.set_show_folder_modal(true);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Rescan Vault Requested (Resync UI with disk)
+    // -------------------------------------------------------------
+    main_window.on_rescan_vault_requested({
+        let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
+        let metadata_store = Arc::clone(&metadata_store);
+        let active_folder = Arc::clone(&active_folder);
+        let search_query = Arc::clone(&search_query);
+
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
         }
     });
 
@@ -957,9 +1028,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Always ensure "General" directory exists as fallback
-            let _ = std::fs::create_dir_all(vault_path.join("General"));
-
             let prefix = format!("{}/", folder_name);
             let active_id = ui.get_active_note_id().to_string();
             let mut active_note_deleted = false;
@@ -975,13 +1043,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
-            {
-                let mut act = active_folder.lock().unwrap();
-                if *act == folder_name || act.starts_with(&prefix) {
-                    *act = "General".to_string();
-                    ui.set_active_folder("General".into());
-                    ui.set_note_category("General".into());
+            let is_active = {
+                let act = active_folder.lock().unwrap();
+                *act == folder_name || act.starts_with(&prefix)
+            };
+
+            if is_active {
+                // Find remaining folders
+                let mut remaining = std::collections::BTreeSet::new();
+                for entry in WalkDir::new(&*vault_path)
+                    .min_depth(1)
+                    .max_depth(1)
+                    .follow_links(false)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                {
+                    let p = entry.path();
+                    if p.is_dir() && p != &*vault_path {
+                        if let Some(file_name) = p.file_name() {
+                            let name = file_name.to_string_lossy();
+                            if !name.is_empty() && !name.starts_with('.') && name != folder_name {
+                                remaining.insert(name.to_string());
+                            }
+                        }
+                    }
                 }
+                {
+                    let store = metadata_store.lock().unwrap();
+                    for meta in store.values() {
+                        if !meta.category.is_empty() && meta.category != folder_name && !meta.category.starts_with(&prefix) {
+                            remaining.insert(meta.category.clone());
+                        }
+                    }
+                }
+
+                let next_folder = remaining.into_iter().next().unwrap_or_default();
+                *active_folder.lock().unwrap() = next_folder.clone();
+                ui.set_active_folder(next_folder.clone().into());
+                ui.set_note_category(next_folder.into());
             }
 
             if active_note_deleted {
