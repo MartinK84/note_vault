@@ -102,21 +102,23 @@ fn refresh_models(
     active_folder: &Arc<Mutex<String>>,
     search_query: &Arc<Mutex<String>>,
 ) {
-    // 1. Scan for flat directories under vault_path
+    // 1. Scan for flat root directories under vault_path
     let mut folder_set = std::collections::BTreeSet::new();
     folder_set.insert("General".to_string());
 
     for entry in WalkDir::new(vault_path)
+        .min_depth(1)
+        .max_depth(1)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
     {
         let p = entry.path();
         if p.is_dir() && p != vault_path {
-            if let Ok(rel) = p.strip_prefix(vault_path) {
-                let name = rel.to_string_lossy().replace('\\', "/");
+            if let Some(file_name) = p.file_name() {
+                let name = file_name.to_string_lossy();
                 if !name.is_empty() && !name.starts_with('.') {
-                    folder_set.insert(name);
+                    folder_set.insert(name.to_string());
                 }
             }
         }
@@ -205,6 +207,61 @@ fn refresh_models(
     ui.set_current_notes(current_notes_model);
 
     ui.set_vault_status_text(format!("{} total note(s)", total_notes).into());
+}
+
+/// Loads a decrypted note into the UI editor pane and resets `has_unsaved_changes` to false.
+fn load_note_into_ui(
+    ui: &MainWindow,
+    note_id: &str,
+    metadata_store: &Arc<Mutex<HashMap<String, NoteMetaSummary>>>,
+    session_password: &Arc<Mutex<Option<Zeroizing<String>>>>,
+) {
+    if note_id.is_empty() {
+        return;
+    }
+
+    let (meta, password_opt) = {
+        let store = metadata_store.lock().unwrap();
+        let meta = store.get(note_id).cloned();
+        let session = session_password.lock().unwrap();
+        (meta, session.clone())
+    };
+
+    if let Some(meta) = meta {
+        ui.set_active_note_id(note_id.into());
+        ui.set_note_title(meta.title.clone().into());
+        ui.set_note_category(meta.category.clone().into());
+        let tags_slint: Vec<slint::SharedString> = meta
+            .tags
+            .iter()
+            .cloned()
+            .map(slint::SharedString::from)
+            .collect();
+        let tags_model: slint::ModelRc<slint::SharedString> =
+            std::rc::Rc::new(slint::VecModel::from(tags_slint)).into();
+        ui.set_note_tags(tags_model);
+        ui.set_note_date(meta.date.clone().into());
+
+        if let Some(password) = password_opt {
+            match load_note_decrypted(&password, &meta.file_path) {
+                Ok(mut note) => {
+                    ui.set_note_content(note.content.clone().into());
+                    note.zeroize();
+                }
+                Err(e) => {
+                    eprintln!("Error decrypting note at {:?}: {}", meta.file_path, e);
+                    ui.set_note_content(
+                        format!("[Error: Failed to decrypt note: {}]", e).into(),
+                    );
+                }
+            }
+        } else {
+            eprintln!("Error: Cannot decrypt note, vault session is locked.");
+            ui.set_note_content("".into());
+        }
+
+        ui.set_has_unsaved_changes(false);
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -380,13 +437,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .ok();
 
-                    // Determine category from relative subdirectory path
+                    // Determine category from relative subdirectory path (root level folder only)
                     let category_name = match file_path
                         .parent()
                         .and_then(|p| p.strip_prefix(&*vault_dir).ok())
                     {
                         Some(rel) if !rel.as_os_str().is_empty() => {
-                            rel.to_string_lossy().replace('\\', "/")
+                            let rel_clean = rel.to_string_lossy().replace('\\', "/");
+                            rel_clean.split('/').next().unwrap_or("General").to_string()
                         }
                         _ => "General".to_string(),
                     };
@@ -473,9 +531,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -------------------------------------------------------------
-    // Callback: Note Selection in Pane 2 (On-Demand Loading)
+    // Callback: Note Selection in Pane 2 (On-Demand Loading with Unsaved Changes Guard)
     // -------------------------------------------------------------
-    main_window.on_select_note({
+    main_window.on_select_note_requested({
         let window_weak = window_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
@@ -483,46 +541,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move |note_id| {
             let Some(ui) = window_weak.upgrade() else { return };
 
-            let (meta, password_opt) = {
-                let store = metadata_store.lock().unwrap();
-                let meta = store.get(note_id.as_str()).cloned();
-                let session = session_password.lock().unwrap();
-                (meta, session.clone())
-            };
-
-            if let Some(meta) = meta {
-                ui.set_active_note_id(note_id);
-                ui.set_note_title(meta.title.clone().into());
-                ui.set_note_category(meta.category.clone().into());
-                let tags_slint: Vec<slint::SharedString> = meta
-                    .tags
-                    .iter()
-                    .cloned()
-                    .map(slint::SharedString::from)
-                    .collect();
-                let tags_model: slint::ModelRc<slint::SharedString> =
-                    std::rc::Rc::new(slint::VecModel::from(tags_slint)).into();
-                ui.set_note_tags(tags_model);
-                ui.set_note_date(meta.date.clone().into());
-
-                if let Some(password) = password_opt {
-                    match load_note_decrypted(&password, &meta.file_path) {
-                        Ok(mut note) => {
-                            ui.set_note_content(note.content.clone().into());
-                            note.zeroize();
-                        }
-                        Err(e) => {
-                            eprintln!("Error decrypting note at {:?}: {}", meta.file_path, e);
-                            ui.set_note_content(
-                                format!("[Error: Failed to decrypt note: {}]", e).into(),
-                            );
-                        }
-                    }
-                } else {
-                    eprintln!("Error: Cannot decrypt note, vault session is locked.");
-                    ui.set_note_content("".into());
-                }
+            if ui.get_has_unsaved_changes() {
+                ui.set_pending_note_id(note_id);
+                ui.set_show_unsaved_warning(true);
+            } else {
+                load_note_into_ui(&ui, note_id.as_str(), &metadata_store, &session_password);
             }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Discard Changes Confirmed
+    // -------------------------------------------------------------
+    main_window.on_discard_changes_confirmed({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            ui.set_show_unsaved_warning(false);
+            ui.set_has_unsaved_changes(false);
+            let pending_id = ui.get_pending_note_id();
+            load_note_into_ui(
+                &ui,
+                pending_id.as_str(),
+                &metadata_store,
+                &session_password,
+            );
         }
     });
 
@@ -557,6 +603,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_search_query("".into());
             ui.set_unlock_password("".into());
             ui.set_vault_status_text("Vault locked".into());
+            ui.set_has_unsaved_changes(false);
+            ui.set_show_unsaved_warning(false);
             ui.set_is_locked(true);
         }
     });
@@ -731,6 +779,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_date(formatted_date.into());
             ui.set_note_category(target_category.clone().into());
             ui.set_active_folder(target_category.into());
+            ui.set_has_unsaved_changes(false);
 
             refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Note saved successfully to {:?}", target_path);
@@ -753,6 +802,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("Just now".into());
             ui.set_note_content("".into());
+            ui.set_has_unsaved_changes(false);
         }
     });
 
@@ -761,19 +811,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_new_folder_requested({
         let window_weak = window_weak.clone();
-        let active_folder = Arc::clone(&active_folder);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
-            let cur_folder = active_folder.lock().unwrap().clone();
             ui.set_new_folder_name("".into());
-            ui.set_new_folder_parent(cur_folder.into());
             ui.set_show_folder_modal(true);
         }
     });
 
     // -------------------------------------------------------------
-    // Callback: Confirm Folder Creation
+    // Callback: Confirm Folder Creation (Root Level Only)
     // -------------------------------------------------------------
     main_window.on_create_folder_confirmed({
         let window_weak = window_weak.clone();
@@ -782,28 +829,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
-        move |name, parent| {
+        move |name| {
             let Some(ui) = window_weak.upgrade() else { return };
             let name_clean = name.trim();
-            let parent_clean = parent.trim();
 
             if name_clean.is_empty() {
                 return;
             }
 
-            let is_root = parent_clean.is_empty()
-                || parent_clean == "(Root)"
-                || parent_clean == "General"
-                || parent_clean == "/";
-
-            let (target_dir, full_folder_name) = if is_root {
-                (vault_path.join(name_clean), name_clean.to_string())
-            } else {
-                (
-                    vault_path.join(parent_clean).join(name_clean),
-                    format!("{}/{}", parent_clean, name_clean),
-                )
-            };
+            // All folders are strictly on the root level
+            let target_dir = vault_path.join(name_clean);
+            let full_folder_name = name_clean.to_string();
 
             if let Err(e) = std::fs::create_dir_all(&target_dir) {
                 eprintln!("Failed to create folder at {:?}: {}", target_dir, e);
@@ -1087,6 +1123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let new_model: slint::ModelRc<slint::SharedString> =
                     std::rc::Rc::new(slint::VecModel::from(tags_vec)).into();
                 ui.set_note_tags(new_model);
+                ui.set_has_unsaved_changes(true);
             }
         }
     });
@@ -1110,6 +1147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let new_model: slint::ModelRc<slint::SharedString> =
                     std::rc::Rc::new(slint::VecModel::from(tags_vec)).into();
                 ui.set_note_tags(new_model);
+                ui.set_has_unsaved_changes(true);
             }
         }
     });

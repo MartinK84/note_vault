@@ -32,13 +32,17 @@ export component MainWindow inherits Window {
     in-out property <string> unlock_password: "";
     in-out property <string> unlock_error_message: "";
 
+    // --- Unsaved Changes Tracking ---
+    in-out property <bool> has_unsaved_changes: false;
+    in-out property <bool> show_unsaved_warning: false;
+    in-out property <string> pending_note_id: "";
+
     // --- Search Query ---
     in-out property <string> search_query: "";
 
     // --- Folder Creation Modal State ---
     in-out property <bool> show_folder_modal: false;
     in-out property <string> new_folder_name: "";
-    in-out property <string> new_folder_parent: "General";
 
     // --- Folder Rename Modal State ---
     in-out property <bool> show_rename_folder_modal: false;
@@ -73,11 +77,12 @@ export component MainWindow inherits Window {
     callback unlock_requested(string);
     callback lock_vault();
     callback save_note_requested(string, string, string); // title, content, category
-    callback select_note(string); // note_id
+    callback select_note_requested(string); // note_id
+    callback discard_changes_confirmed();
     callback folder_selected(string); // folder name
     callback new_note_requested();
     callback new_folder_requested();
-    callback create_folder_confirmed(string, string); // name, parent
+    callback create_folder_confirmed(string); // folder_name
     callback rename_folder_confirmed(string, string); // old_name, new_name
     callback delete_folder_confirmed(string); // folder_name
     callback move_note_confirmed(string, string); // note_id, target_folder
@@ -113,9 +118,10 @@ export component MainWindow inherits Window {
                 padding: 0px;
                 spacing: 0px;
 
-                // Pane 1 Header (Height 44px)
+                // Pane 1 Header (Height 52px)
                 Rectangle {
-                    height: 44px;
+                    height: 52px;
+                    vertical-stretch: 0;
                     background: #181825;
 
                     // Bottom border divider
@@ -128,11 +134,11 @@ export component MainWindow inherits Window {
                     }
 
                     HorizontalLayout {
-                        height: parent.height;
-                        padding-left: 14px;
-                        padding-right: 10px;
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        padding-left: 16px;
+                        padding-right: 16px;
                         spacing: 6px;
-                        alignment: space-between;
 
                         Text {
                             text: "FOLDERS";
@@ -140,13 +146,16 @@ export component MainWindow inherits Window {
                             font-weight: 700;
                             color: #6c7086;
                             letter-spacing: 1px;
-                            horizontal-stretch: 1;
                             vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: transparent;
                         }
 
                         HorizontalLayout {
                             spacing: 6px;
-                            alignment: center;
 
                             Button {
                                 height: 28px;
@@ -154,7 +163,6 @@ export component MainWindow inherits Window {
                                 text: "+";
                                 clicked => {
                                     root.new_folder_name = "";
-                                    root.new_folder_parent = root.active_folder != "" ? root.active_folder : "General";
                                     root.show_folder_modal = true;
                                     root.new_folder_requested();
                                 }
@@ -365,9 +373,10 @@ export component MainWindow inherits Window {
                 padding: 0px;
                 spacing: 0px;
 
-                // Pane 2 Header (Height 44px, Search LineEdit + New Note Button)
+                // Pane 2 Header (Height 52px, Search LineEdit + New Note Button)
                 Rectangle {
-                    height: 44px;
+                    height: 52px;
+                    vertical-stretch: 0;
                     background: #1e1e2e;
 
                     // Bottom border divider
@@ -380,10 +389,11 @@ export component MainWindow inherits Window {
                     }
 
                     HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        padding-left: 16px;
+                        padding-right: 16px;
                         spacing: 8px;
-                        alignment: center;
 
                         LineEdit {
                             height: 28px;
@@ -516,8 +526,7 @@ export component MainWindow inherits Window {
 
                             card_touch := TouchArea {
                                 clicked => {
-                                    root.active_note_id = note.id;
-                                    root.select_note(note.id);
+                                    root.select_note_requested(note.id);
                                 }
                                 pointer-event(event) => {
                                     if event.button == PointerEventButton.right {
@@ -603,9 +612,9 @@ export component MainWindow inherits Window {
                     spacing: 0px;
                     vertical-stretch: 1;
 
-                    // Single-line Metadata Header Bar (Height 44px)
+                    // Single-line Metadata Header Bar (Height 52px)
                     Rectangle {
-                        height: 44px;
+                        height: 52px;
                         vertical-stretch: 0;
                         background: #1e1e2e;
 
@@ -619,19 +628,23 @@ export component MainWindow inherits Window {
                         }
 
                         HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 14px;
+                            padding-top: 12px;
+                            padding-bottom: 12px;
+                            padding-left: 16px;
+                            padding-right: 16px;
                             spacing: 10px;
-                            alignment: center;
                             vertical-stretch: 0;
 
-                            // 1. Title LineEdit (stretching)
+                            // 1. Title LineEdit
                             LineEdit {
                                 height: 28px;
                                 font-size: 13px;
                                 text <=> root.note_title;
                                 placeholder-text: "Note Title...";
-                                horizontal-stretch: 1;
+                                width: 250px;
+                                edited => {
+                                    root.has_unsaved_changes = true;
+                                }
                             }
 
                             // 2. Interactive Tag Chips
@@ -668,6 +681,7 @@ export component MainWindow inherits Window {
 
                                             tag_del_touch := TouchArea {
                                                 clicked => {
+                                                    root.has_unsaved_changes = true;
                                                     root.remove_tag_requested(idx);
                                                 }
                                             }
@@ -694,6 +708,12 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            // Spacer to push Date and Save to the right
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: transparent;
+                            }
+
                             // 3. Date Display
                             HorizontalLayout {
                                 spacing: 4px;
@@ -713,18 +733,39 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // 4. Save Button
-                            Button {
+                            // 4. Save Button (Dynamic Styling)
+                            save_btn := Rectangle {
                                 height: 28px;
-                                text: "💾 Save";
-                                primary: true;
-                                enabled: root.active_note_id != "" || root.note_title != "";
-                                clicked => {
-                                    root.save_note_requested(
-                                        root.note_title,
-                                        root.note_content,
-                                        root.note_category
-                                    );
+                                border-radius: 6px;
+                                background: root.has_unsaved_changes
+                                    ? (save_touch.has-hover ? #f5a0b8 : #f38ba8)
+                                    : (save_touch.has-hover ? #585b70 : #45475a);
+                                animate background { duration: 150ms; }
+
+                                save_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.save_note_requested(
+                                            root.note_title,
+                                            root.note_content,
+                                            root.note_category
+                                        );
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    spacing: 6px;
+                                    alignment: center;
+
+                                    Text {
+                                        text: "💾 Save";
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: root.has_unsaved_changes ? #11111b : #a6adc8;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                         }
@@ -740,6 +781,9 @@ export component MainWindow inherits Window {
                             TextEdit {
                                 text <=> root.note_content;
                                 font-size: 14px;
+                                edited => {
+                                    root.has_unsaved_changes = true;
+                                }
                             }
                         }
                     }
@@ -788,8 +832,8 @@ export component MainWindow inherits Window {
         Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 380px;
-            height: 230px;
+            width: 360px;
+            height: 180px;
             background: #1e1e2e;
             border-radius: 12px;
             border-width: 1px;
@@ -817,29 +861,7 @@ export component MainWindow inherits Window {
                     accepted => {
                         if root.new_folder_name != "" {
                             root.show_folder_modal = false;
-                            root.create_folder_confirmed(root.new_folder_name, root.new_folder_parent);
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 6px;
-                    alignment: center;
-
-                    Text {
-                        text: "Parent:";
-                        font-size: 12px;
-                        color: #a6adc8;
-                        vertical-alignment: center;
-                    }
-
-                    ComboBox {
-                        height: 28px;
-                        horizontal-stretch: 1;
-                        model: root.available_categories;
-                        current-value: root.new_folder_parent;
-                        selected(val) => {
-                            root.new_folder_parent = val;
+                            root.create_folder_confirmed(root.new_folder_name);
                         }
                     }
                 }
@@ -864,7 +886,7 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                         clicked => {
                             root.show_folder_modal = false;
-                            root.create_folder_confirmed(root.new_folder_name, root.new_folder_parent);
+                            root.create_folder_confirmed(root.new_folder_name);
                         }
                     }
                 }
@@ -1244,6 +1266,7 @@ export component MainWindow inherits Window {
                     accepted => {
                         if root.new_tag_name != "" {
                             root.show_add_tag_modal = false;
+                            root.has_unsaved_changes = true;
                             root.add_tag_confirmed(root.new_tag_name);
                         }
                     }
@@ -1269,7 +1292,78 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                         clicked => {
                             root.show_add_tag_modal = false;
+                            root.has_unsaved_changes = true;
                             root.add_tag_confirmed(root.new_tag_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: UNSAVED CHANGES WARNING
+    // ==========================================
+    if root.show_unsaved_warning : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 420px;
+            height: 190px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                alignment: center;
+
+                Text {
+                    text: "⚠️ Unsaved Changes";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #f38ba8;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "You have unsaved changes. Do you want to discard them?";
+                    font-size: 13px;
+                    color: #cdd6f4;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_unsaved_warning = false;
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Discard Changes";
+                        primary: true;
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.discard_changes_confirmed();
                         }
                     }
                 }
