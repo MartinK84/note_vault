@@ -1,0 +1,20 @@
+[package]
+name = "note_vault"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Serialisierung
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Kryptographie (Pure Rust Implementierungen)
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+rand_core = { version = "0.6", features = ["std"] }
+
+# Speicher-Sicherheit und Hilfstools
+zeroize = { version = "1.6", features = ["zeroize_derive"] }
+uuid = { version = "1.4", features = ["v4", "serde"] }
+clap = { version = "4.6.6", features = ["derive"] }
+rpassword = "7.5.4"
