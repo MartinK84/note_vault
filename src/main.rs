@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use note_vault::{load_note_decrypted, save_note_encrypted, Note};
 use zeroize::Zeroizing;
 
@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -44,7 +44,17 @@ enum Commands {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
-    match cli.command {
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            let mut cmd = Cli::command();
+            cmd.print_help()?;
+            println!();
+            return Ok(());
+        }
+    };
+
+    match command {
         Commands::Encrypt { input, output } => {
             // 1. Verify input file exists
             if !input.exists() {
