@@ -1,0 +1,1343 @@
+import { Button, LineEdit, TextEdit, ScrollView, ProgressIndicator, ComboBox } from "std-widgets.slint";
+
+export struct NoteMetadata {
+    id: string,
+    title: string,
+    category: string,
+    author: string,
+    tags: string,
+    date: string,
+}
+
+export component MainWindow inherits Window {
+    title: "NoteVault - Secure Encrypted Notes";
+    preferred-width: 1180px;
+    preferred-height: 740px;
+    min-width: 960px;
+    min-height: 600px;
+    background: #181825;
+    default-font-family: "Segoe UI, Inter, sans-serif";
+
+    // --- Dynamic 3-Pane Data Models ---
+    in property <[string]> folders: [];
+    in-out property <string> active_folder: "General";
+    in property <[NoteMetadata]> current_notes: [];
+    in property <[string]> available_categories: [];
+    in property <string> vault_status_text: "Locked";
+
+    // --- State Properties ---
+    in-out property <bool> is_locked: true;
+    in-out property <bool> is_loading: false;
+    in-out property <float> loading_progress: 0.0;
+    in-out property <string> loading_status_text: "";
+    in-out property <string> unlock_password: "";
+    in-out property <string> unlock_error_message: "";
+
+    // --- Search Query ---
+    in-out property <string> search_query: "";
+
+    // --- Folder Creation Modal State ---
+    in-out property <bool> show_folder_modal: false;
+    in-out property <string> new_folder_name: "";
+    in-out property <string> new_folder_parent: "General";
+
+    // --- Folder Rename Modal State ---
+    in-out property <bool> show_rename_folder_modal: false;
+    in-out property <string> target_folder_name: "";
+    in-out property <string> rename_new_name: "";
+
+    // --- Folder Deletion Modal State ---
+    in-out property <bool> show_delete_folder_modal: false;
+
+    // --- Note Move Modal State ---
+    in-out property <bool> show_move_note_modal: false;
+    in-out property <string> target_note_id: "";
+    in-out property <string> target_note_title: "";
+    in-out property <string> move_target_folder: "General";
+
+    // --- Note Deletion Modal State ---
+    in-out property <bool> show_delete_note_modal: false;
+
+    // --- Active Note Metadata & Editor Content ---
+    in-out property <string> active_note_id: "";
+    in-out property <string> note_title: "";
+    in-out property <string> note_category: "";
+    in-out property <string> note_author: "";
+    in-out property <string> note_tags: "";
+    in-out property <string> note_date: "";
+    in-out property <string> note_content: "";
+
+    // --- Callbacks for Rust Backend ---
+    callback unlock_requested(string);
+    callback lock_vault();
+    callback save_note_requested(string, string, string, string, string); // title, author, tags, content, category
+    callback select_note(string); // note_id
+    callback folder_selected(string); // folder name
+    callback new_note_requested();
+    callback new_folder_requested();
+    callback create_folder_confirmed(string, string); // name, parent
+    callback rename_folder_confirmed(string, string); // old_name, new_name
+    callback delete_folder_confirmed(string); // folder_name
+    callback move_note_confirmed(string, string); // note_id, target_folder
+    callback delete_note_confirmed(string); // note_id
+    callback search_changed(string);
+
+    // ==========================================
+    // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
+    // ==========================================
+    HorizontalLayout {
+        padding: 0px;
+        spacing: 0px;
+
+        // -------------------------------------------------------------
+        // PANE 1: FOLDERS LIST (Fixed ~200px, Dark Background #181825)
+        // -------------------------------------------------------------
+        Rectangle {
+            width: 200px;
+            background: #181825;
+
+            // 1px right border divider
+            Rectangle {
+                x: parent.width - 1px;
+                y: 0px;
+                width: 1px;
+                height: parent.height;
+                background: #313244;
+            }
+
+            VerticalLayout {
+                padding: 0px;
+                spacing: 0px;
+
+                // Pane 1 Header (Height 44px)
+                Rectangle {
+                    height: 44px;
+                    background: #181825;
+
+                    // Bottom border divider
+                    Rectangle {
+                        x: 0px;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: #313244;
+                    }
+
+                    HorizontalLayout {
+                        height: parent.height;
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        spacing: 8px;
+                        alignment: center;
+
+                        Text {
+                            text: "FOLDERS";
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: #6c7086;
+                            letter-spacing: 1px;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+
+                        // Add Folder Button
+                        Rectangle {
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 4px;
+                            background: add_f_touch.has-hover ? #313244 : Colors.transparent;
+
+                            add_f_touch := TouchArea {
+                                clicked => {
+                                    root.new_folder_name = "";
+                                    root.new_folder_parent = root.active_folder != "" ? root.active_folder : "General";
+                                    root.show_folder_modal = true;
+                                    root.new_folder_requested();
+                                }
+                            }
+
+                            Text {
+                                text: "+";
+                                font-size: 16px;
+                                font-weight: 600;
+                                color: #a6adc8;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Vault Lock Button
+                        Rectangle {
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 4px;
+                            background: lock_touch.has-hover ? #313244 : Colors.transparent;
+
+                            lock_touch := TouchArea {
+                                clicked => {
+                                    root.is_locked = true;
+                                    root.lock_vault();
+                                }
+                            }
+
+                            Text {
+                                text: "🔒";
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Folders Flat List
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 3px;
+                        alignment: start;
+
+                        for folder in root.folders : Rectangle {
+                            height: 32px;
+                            border-radius: 6px;
+                            background: root.active_folder == folder ? #313244 : (folder_touch.has-hover ? #1e1e2e : Colors.transparent);
+
+                            folder_menu := PopupWindow {
+                                width: 140px;
+                                height: 74px;
+                                x: folder_touch.mouse-x;
+                                y: folder_touch.mouse-y;
+
+                                Rectangle {
+                                    background: #1e1e2e;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: #45475a;
+
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        spacing: 2px;
+                                        alignment: center;
+
+                                        // Rename Folder option
+                                        Rectangle {
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: ren_touch.has-hover ? #313244 : Colors.transparent;
+
+                                            ren_touch := TouchArea {
+                                                clicked => {
+                                                    folder_menu.close();
+                                                    root.target_folder_name = folder;
+                                                    root.rename_new_name = folder;
+                                                    root.show_rename_folder_modal = true;
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                spacing: 8px;
+                                                alignment: start;
+
+                                                Text {
+                                                    text: "✏️";
+                                                    font-size: 12px;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: "Rename Folder";
+                                                    font-size: 12px;
+                                                    color: #cdd6f4;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+
+                                        // Delete Folder option
+                                        Rectangle {
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: del_f_touch.has-hover ? #313244 : Colors.transparent;
+
+                                            del_f_touch := TouchArea {
+                                                clicked => {
+                                                    folder_menu.close();
+                                                    root.target_folder_name = folder;
+                                                    root.show_delete_folder_modal = true;
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                spacing: 8px;
+                                                alignment: start;
+
+                                                Text {
+                                                    text: "🗑️";
+                                                    font-size: 12px;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: "Delete Folder";
+                                                    font-size: 12px;
+                                                    color: #f38ba8;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            folder_touch := TouchArea {
+                                clicked => {
+                                    root.active_folder = folder;
+                                    root.folder_selected(folder);
+                                }
+                                pointer-event(event) => {
+                                    if event.button == PointerEventButton.right {
+                                        folder_menu.show();
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                alignment: start;
+
+                                Text {
+                                    text: "📁";
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: folder;
+                                    font-size: 13px;
+                                    font-weight: root.active_folder == folder ? 600 : 400;
+                                    color: root.active_folder == folder ? #89b4fa : #cdd6f4;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Pane 1 Footer Status
+                Rectangle {
+                    height: 28px;
+                    background: #181825;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 6px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: 7px;
+                            height: 7px;
+                            border-radius: 3px;
+                            background: root.is_locked ? #f38ba8 : #a6e3a1;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        Text {
+                            text: root.vault_status_text;
+                            font-size: 10px;
+                            color: #6c7086;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------
+        // PANE 2: NOTES LIST (Fixed ~300px, Background #1e1e2e)
+        // -------------------------------------------------------------
+        Rectangle {
+            width: 300px;
+            background: #1e1e2e;
+
+            // 1px right border divider
+            Rectangle {
+                x: parent.width - 1px;
+                y: 0px;
+                width: 1px;
+                height: parent.height;
+                background: #313244;
+            }
+
+            VerticalLayout {
+                padding: 0px;
+                spacing: 0px;
+
+                // Pane 2 Header (Height 44px, Search LineEdit + New Note Button)
+                Rectangle {
+                    height: 44px;
+                    background: #1e1e2e;
+
+                    // Bottom border divider
+                    Rectangle {
+                        x: 0px;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: #313244;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        alignment: center;
+
+                        LineEdit {
+                            height: 28px;
+                            font-size: 13px;
+                            text <=> root.search_query;
+                            placeholder-text: "🔍 Search notes...";
+                            horizontal-stretch: 1;
+                            edited(val) => {
+                                root.search_changed(val);
+                            }
+                        }
+
+                        Button {
+                            height: 28px;
+                            width: 34px;
+                            text: "+";
+                            clicked => {
+                                root.new_note_requested();
+                            }
+                        }
+                    }
+                }
+
+                // Pane 2 Notes Cards List (ScrollView)
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 6px;
+                        alignment: start;
+
+                        for note in root.current_notes : Rectangle {
+                            height: 60px;
+                            border-radius: 6px;
+                            background: root.active_note_id == note.id ? #313244 : (card_touch.has-hover ? #252636 : #181825);
+                            border-width: root.active_note_id == note.id ? 1px : 0px;
+                            border-color: #45475a;
+
+                            note_menu := PopupWindow {
+                                width: 140px;
+                                height: 74px;
+                                x: card_touch.mouse-x;
+                                y: card_touch.mouse-y;
+
+                                Rectangle {
+                                    background: #1e1e2e;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: #45475a;
+
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        spacing: 2px;
+                                        alignment: center;
+
+                                        // Move Note option
+                                        Rectangle {
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: move_touch.has-hover ? #313244 : Colors.transparent;
+
+                                            move_touch := TouchArea {
+                                                clicked => {
+                                                    note_menu.close();
+                                                    root.target_note_id = note.id;
+                                                    root.target_note_title = note.title != "" ? note.title : "Untitled";
+                                                    root.move_target_folder = root.active_folder != "" ? root.active_folder : "General";
+                                                    root.show_move_note_modal = true;
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                spacing: 8px;
+                                                alignment: start;
+
+                                                Text {
+                                                    text: "📁";
+                                                    font-size: 12px;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: "Move Note";
+                                                    font-size: 12px;
+                                                    color: #cdd6f4;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+
+                                        // Delete Note option
+                                        Rectangle {
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: del_touch.has-hover ? #313244 : Colors.transparent;
+
+                                            del_touch := TouchArea {
+                                                clicked => {
+                                                    note_menu.close();
+                                                    root.target_note_id = note.id;
+                                                    root.target_note_title = note.title != "" ? note.title : "Untitled";
+                                                    root.show_delete_note_modal = true;
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 10px;
+                                                padding-right: 10px;
+                                                spacing: 8px;
+                                                alignment: start;
+
+                                                Text {
+                                                    text: "🗑️";
+                                                    font-size: 12px;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: "Delete Note";
+                                                    font-size: 12px;
+                                                    color: #f38ba8;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            card_touch := TouchArea {
+                                clicked => {
+                                    root.active_note_id = note.id;
+                                    root.select_note(note.id);
+                                }
+                                pointer-event(event) => {
+                                    if event.button == PointerEventButton.right {
+                                        note_menu.show();
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                padding-top: 8px;
+                                padding-bottom: 8px;
+                                spacing: 4px;
+                                alignment: center;
+
+                                // Note Title (Bold)
+                                Text {
+                                    text: note.title != "" ? note.title : "Untitled";
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    color: root.active_note_id == note.id ? #89b4fa : #cdd6f4;
+                                    overflow: elide;
+                                }
+
+                                // Bottom Row: Tags (left) and Date (right)
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 6px;
+
+                                    Text {
+                                        text: "🏷️ " + (note.tags != "" ? note.tags : "No tags");
+                                        font-size: 11px;
+                                        color: #6c7086;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                        vertical-alignment: center;
+                                    }
+
+                                    Text {
+                                        text: note.date;
+                                        font-size: 10px;
+                                        color: #6c7086;
+                                        horizontal-alignment: right;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Empty State if no notes in active folder
+                        if root.current_notes.length == 0 : VerticalLayout {
+                            padding-top: 40px;
+                            alignment: center;
+                            spacing: 6px;
+
+                            Text {
+                                text: root.search_query != "" ? "No matching notes" : "No notes in this folder";
+                                font-size: 12px;
+                                color: #6c7086;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------
+        // PANE 3: EDITOR (Flexible Width, Background #1e1e2e)
+        // -------------------------------------------------------------
+        Rectangle {
+            horizontal-stretch: 1;
+            background: #1e1e2e;
+
+            VerticalLayout {
+                padding: 0px;
+                spacing: 0px;
+
+                // Active Note View: Single-line Metadata Header + TextEdit
+                if root.active_note_id != "" : VerticalLayout {
+                    padding: 0px;
+                    spacing: 0px;
+                    vertical-stretch: 1;
+
+                    // Single-line Metadata Header Bar (Height 44px)
+                    Rectangle {
+                        height: 44px;
+                        vertical-stretch: 0;
+                        background: #1e1e2e;
+
+                        // Bottom border divider
+                        Rectangle {
+                            x: 0px;
+                            y: parent.height - 1px;
+                            width: parent.width;
+                            height: 1px;
+                            background: #313244;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 10px;
+                            alignment: center;
+                            vertical-stretch: 0;
+
+                            // 1. Title LineEdit (stretching)
+                            LineEdit {
+                                height: 28px;
+                                font-size: 13px;
+                                text <=> root.note_title;
+                                placeholder-text: "Note Title...";
+                                horizontal-stretch: 1;
+                            }
+
+                            // 2. Category ComboBox
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+
+                                Text {
+                                    text: "📁";
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+
+                                ComboBox {
+                                    height: 28px;
+                                    width: 130px;
+                                    model: root.available_categories;
+                                    current-value: root.note_category;
+                                    selected(val) => {
+                                        root.note_category = val;
+                                    }
+                                }
+                            }
+
+                            // 3. Author LineEdit
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+
+                                Text {
+                                    text: "👤";
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                LineEdit {
+                                    height: 28px;
+                                    font-size: 13px;
+                                    text <=> root.note_author;
+                                    placeholder-text: "Author";
+                                    width: 100px;
+                                }
+                            }
+
+                            // 4. Tags LineEdit
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+
+                                Text {
+                                    text: "🏷️";
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                LineEdit {
+                                    height: 28px;
+                                    font-size: 13px;
+                                    text <=> root.note_tags;
+                                    placeholder-text: "Tags";
+                                    width: 130px;
+                                }
+                            }
+
+                            // 5. Date Display
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+
+                                Text {
+                                    text: "📅";
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: root.note_date != "" ? root.note_date : "No date";
+                                    font-size: 11px;
+                                    color: #9399b2;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // 6. Save Button
+                            Button {
+                                height: 28px;
+                                text: "💾 Save";
+                                primary: true;
+                                enabled: root.active_note_id != "" || root.note_title != "";
+                                clicked => {
+                                    root.save_note_requested(
+                                        root.note_title,
+                                        root.note_author,
+                                        root.note_tags,
+                                        root.note_content,
+                                        root.note_category
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Text Editor Area
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: #181825;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            TextEdit {
+                                text <=> root.note_content;
+                                font-size: 14px;
+                            }
+                        }
+                    }
+                }
+
+                // Inactive / Empty Placeholder when no note is selected
+                if root.active_note_id == "" : Rectangle {
+                    vertical-stretch: 1;
+                    background: #181825;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 12px;
+
+                        Text {
+                            text: "📝";
+                            font-size: 42px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Select a note or create a new one";
+                            font-size: 15px;
+                            font-weight: 600;
+                            color: #6c7086;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: CREATE FOLDER
+    // ==========================================
+    if root.show_folder_modal : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 380px;
+            height: 230px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                alignment: center;
+
+                Text {
+                    text: "Create New Folder";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #cdd6f4;
+                    horizontal-alignment: center;
+                }
+
+                folder_name_input := LineEdit {
+                    height: 28px;
+                    font-size: 13px;
+                    text <=> root.new_folder_name;
+                    placeholder-text: "Folder name...";
+                    accepted => {
+                        if root.new_folder_name != "" {
+                            root.show_folder_modal = false;
+                            root.create_folder_confirmed(root.new_folder_name, root.new_folder_parent);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: center;
+
+                    Text {
+                        text: "Parent:";
+                        font-size: 12px;
+                        color: #a6adc8;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        height: 28px;
+                        horizontal-stretch: 1;
+                        model: root.available_categories;
+                        current-value: root.new_folder_parent;
+                        selected(val) => {
+                            root.new_folder_parent = val;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_folder_modal = false;
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Create";
+                        primary: true;
+                        enabled: root.new_folder_name != "";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_folder_modal = false;
+                            root.create_folder_confirmed(root.new_folder_name, root.new_folder_parent);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: RENAME FOLDER
+    // ==========================================
+    if root.show_rename_folder_modal : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 380px;
+            height: 200px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                alignment: center;
+
+                Text {
+                    text: "Rename Folder";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #cdd6f4;
+                    horizontal-alignment: center;
+                }
+
+                rename_input := LineEdit {
+                    height: 28px;
+                    font-size: 13px;
+                    text <=> root.rename_new_name;
+                    placeholder-text: "New folder name...";
+                    accepted => {
+                        if root.rename_new_name != "" {
+                            root.show_rename_folder_modal = false;
+                            root.rename_folder_confirmed(root.target_folder_name, root.rename_new_name);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_rename_folder_modal = false;
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Rename";
+                        primary: true;
+                        enabled: root.rename_new_name != "" && root.rename_new_name != root.target_folder_name;
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_rename_folder_modal = false;
+                            root.rename_folder_confirmed(root.target_folder_name, root.rename_new_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: DELETE FOLDER
+    // ==========================================
+    if root.show_delete_folder_modal : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 420px;
+            height: 230px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                alignment: center;
+
+                Text {
+                    text: "Delete Folder";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #f38ba8;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Delete folder \"" + root.target_folder_name + "\"?";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: #cdd6f4;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: "Are you sure? This will permanently delete all encrypted notes inside this folder.";
+                    font-size: 12px;
+                    color: #f38ba8;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_delete_folder_modal = false;
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Delete Permanently";
+                        primary: true;
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_delete_folder_modal = false;
+                            root.delete_folder_confirmed(root.target_folder_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: MOVE NOTE
+    // ==========================================
+    if root.show_move_note_modal : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 380px;
+            height: 220px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                alignment: center;
+
+                Text {
+                    text: "Move Note";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #cdd6f4;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Move \"" + root.target_note_title + "\" to:";
+                    font-size: 13px;
+                    color: #a6adc8;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: center;
+
+                    Text {
+                        text: "Folder:";
+                        font-size: 12px;
+                        color: #a6adc8;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        height: 28px;
+                        horizontal-stretch: 1;
+                        model: root.available_categories;
+                        current-value: root.move_target_folder;
+                        selected(val) => {
+                            root.move_target_folder = val;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_move_note_modal = false;
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Move";
+                        primary: true;
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_move_note_modal = false;
+                            root.move_note_confirmed(root.target_note_id, root.move_target_folder);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: DELETE NOTE
+    // ==========================================
+    if root.show_delete_note_modal : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 400px;
+            height: 210px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                alignment: center;
+
+                Text {
+                    text: "Delete Note";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #f38ba8;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Are you sure you want to permanently delete \"" + root.target_note_title + "\"?";
+                    font-size: 13px;
+                    color: #cdd6f4;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: "This action cannot be undone.";
+                    font-size: 11px;
+                    color: #a6adc8;
+                    horizontal-alignment: center;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_delete_note_modal = false;
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Delete";
+                        primary: true;
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_delete_note_modal = false;
+                            root.delete_note_confirmed(root.target_note_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: VAULT PASSWORD UNLOCK
+    // ==========================================
+    if root.is_locked : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd; // Dark semi-transparent scrim
+
+        // Scrim touch interceptor so clicks don't pass through to underlying UI
+        TouchArea {}
+
+        // Centered Modal Window Card
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 440px;
+            height: root.is_loading ? 340px : 290px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 28px;
+                spacing: 16px;
+                alignment: center;
+
+                // Lock Icon & Heading
+                VerticalLayout {
+                    spacing: 6px;
+                    alignment: center;
+
+                    Text {
+                        text: "🔐";
+                        font-size: 32px;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "Unlock Secure Vault";
+                        font-size: 20px;
+                        font-weight: 700;
+                        color: #cdd6f4;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "Enter your master passphrase to decrypt and access your notes.";
+                        font-size: 13px;
+                        color: #a6adc8;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Password Input Field
+                pwd_input := LineEdit {
+                    text <=> root.unlock_password;
+                    input-type: password;
+                    placeholder-text: "Master Vault Password...";
+                    font-size: 14px;
+                    accepted => {
+                        root.unlock_requested(root.unlock_password);
+                    }
+                }
+
+                // Error message (if any)
+                if root.unlock_error_message != "" : Text {
+                    text: root.unlock_error_message;
+                    font-size: 12px;
+                    color: #f38ba8; // Danger red
+                    horizontal-alignment: center;
+                }
+
+                // Unlock Action Button
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        text: "Unlock Vault";
+                        primary: true;
+                        enabled: !root.is_loading;
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.unlock_requested(root.unlock_password);
+                        }
+                    }
+                }
+
+                // Progress Bar Component (for recursive vault loading process)
+                if root.is_loading : VerticalLayout {
+                    spacing: 6px;
+
+                    HorizontalLayout {
+                        Text {
+                            text: root.loading_status_text;
+                            font-size: 11px;
+                            color: #a6adc8;
+                            horizontal-stretch: 1;
+                        }
+
+                        Text {
+                            text: @tr("{0}%", Math.round(root.loading_progress * 100));
+                            font-size: 11px;
+                            font-weight: 600;
+                            color: #89b4fa;
+                        }
+                    }
+
+                    ProgressIndicator {
+                        progress: root.loading_progress;
+                    }
+                }
+            }
+        }
+    }
+}
