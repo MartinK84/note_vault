@@ -74,7 +74,6 @@ pub struct Note {
     pub id: Uuid,
     pub title: String,
     pub description: Option<String>,
-    pub author: String,
     pub tags: Vec<String>,
     pub content: String,
     pub created_at: i64,
@@ -86,7 +85,6 @@ impl Note {
     pub fn new(
         title: impl Into<String>,
         description: Option<String>,
-        author: impl Into<String>,
         tags: Vec<String>,
         content: impl Into<String>,
     ) -> Self {
@@ -99,7 +97,6 @@ impl Note {
             id: Uuid::new_v4(),
             title: title.into(),
             description,
-            author: author.into(),
             tags,
             content: content.into(),
             created_at,
@@ -112,7 +109,6 @@ impl Zeroize for Note {
     fn zeroize(&mut self) {
         self.title.zeroize();
         self.description.zeroize();
-        self.author.zeroize();
         self.tags.zeroize();
         self.content.zeroize();
         self.created_at.zeroize();
@@ -274,7 +270,6 @@ mod tests {
         let original_note = Note::new(
             "Secret Master Key Document",
             None,
-            "",
             Vec::new(),
             "Sensitive payload: keep this secret and offline!",
         );
@@ -299,7 +294,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join(format!("note_vault_test_{}", Uuid::new_v4()));
         let file_path = temp_dir.join("test_note.vault");
 
-        let original_note = Note::new("Confidential Note", None, "", Vec::new(), "Content...");
+        let original_note = Note::new("Confidential Note", None, Vec::new(), "Content...");
         let correct_password = "CorrectPassword123!";
         let wrong_password = "WrongPassword456?";
 
@@ -325,7 +320,6 @@ mod tests {
         let note = Note::new(
             "Integrity Check",
             None,
-            "",
             Vec::new(),
             "Verify AEAD MAC verification",
         );
@@ -351,7 +345,7 @@ mod tests {
         let file_path_1 = temp_dir.join("note1.vault");
         let file_path_2 = temp_dir.join("note2.vault");
 
-        let note = Note::new("Identical Note", None, "", Vec::new(), "Identical Content");
+        let note = Note::new("Identical Note", None, Vec::new(), "Identical Content");
         let password = "SamePasswordAcrossSaves";
 
         save_note_encrypted(&note, password, &file_path_1).unwrap();
@@ -393,14 +387,12 @@ mod tests {
         let mut note = Note::new(
             "Design Doc",
             Some("Detailed design specification".to_string()),
-            "Security Team",
             vec!["spec".to_string(), "v1".to_string()],
             "Secret payload",
         );
 
         assert_eq!(note.title, "Design Doc");
         assert_eq!(note.description, Some("Detailed design specification".to_string()));
-        assert_eq!(note.author, "Security Team");
         assert_eq!(note.tags, vec!["spec", "v1"]);
         assert_eq!(note.created_at, note.updated_at);
 
@@ -408,7 +400,6 @@ mod tests {
 
         assert_eq!(note.title, "");
         assert_eq!(note.description, None);
-        assert_eq!(note.author, "");
         assert!(note.tags.iter().all(|t| t.is_empty()) || note.tags.is_empty());
         assert_eq!(note.content, "");
         assert_eq!(note.created_at, 0);

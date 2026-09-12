@@ -4,7 +4,6 @@ export struct NoteMetadata {
     id: string,
     title: string,
     category: string,
-    author: string,
     tags: string,
     date: string,
 }
@@ -58,19 +57,22 @@ export component MainWindow inherits Window {
     // --- Note Deletion Modal State ---
     in-out property <bool> show_delete_note_modal: false;
 
+    // --- Add Tag Modal State ---
+    in-out property <bool> show_add_tag_modal: false;
+    in-out property <string> new_tag_name: "";
+
     // --- Active Note Metadata & Editor Content ---
     in-out property <string> active_note_id: "";
     in-out property <string> note_title: "";
     in-out property <string> note_category: "";
-    in-out property <string> note_author: "";
-    in-out property <string> note_tags: "";
+    in-out property <[string]> note_tags: [];
     in-out property <string> note_date: "";
     in-out property <string> note_content: "";
 
     // --- Callbacks for Rust Backend ---
     callback unlock_requested(string);
     callback lock_vault();
-    callback save_note_requested(string, string, string, string, string); // title, author, tags, content, category
+    callback save_note_requested(string, string, string); // title, content, category
     callback select_note(string); // note_id
     callback folder_selected(string); // folder name
     callback new_note_requested();
@@ -80,6 +82,8 @@ export component MainWindow inherits Window {
     callback delete_folder_confirmed(string); // folder_name
     callback move_note_confirmed(string, string); // note_id, target_folder
     callback delete_note_confirmed(string); // note_id
+    callback remove_tag_requested(int); // tag index
+    callback add_tag_confirmed(string); // new tag
     callback search_changed(string);
 
     // ==========================================
@@ -126,9 +130,9 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         height: parent.height;
                         padding-left: 14px;
-                        padding-right: 14px;
-                        spacing: 8px;
-                        alignment: center;
+                        padding-right: 10px;
+                        spacing: 6px;
+                        alignment: space-between;
 
                         Text {
                             text: "FOLDERS";
@@ -140,14 +144,14 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
 
-                        // Add Folder Button
-                        Rectangle {
-                            width: 24px;
-                            height: 24px;
-                            border-radius: 4px;
-                            background: add_f_touch.has-hover ? #313244 : Colors.transparent;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: center;
 
-                            add_f_touch := TouchArea {
+                            Button {
+                                height: 28px;
+                                width: 34px;
+                                text: "+";
                                 clicked => {
                                     root.new_folder_name = "";
                                     root.new_folder_parent = root.active_folder != "" ? root.active_folder : "General";
@@ -156,35 +160,14 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            Text {
-                                text: "+";
-                                font-size: 16px;
-                                font-weight: 600;
-                                color: #a6adc8;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        // Vault Lock Button
-                        Rectangle {
-                            width: 24px;
-                            height: 24px;
-                            border-radius: 4px;
-                            background: lock_touch.has-hover ? #313244 : Colors.transparent;
-
-                            lock_touch := TouchArea {
+                            Button {
+                                height: 28px;
+                                width: 34px;
+                                text: "🔒";
                                 clicked => {
                                     root.is_locked = true;
                                     root.lock_vault();
                                 }
-                            }
-
-                            Text {
-                                text: "🔒";
-                                font-size: 12px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
                             }
                         }
                     }
@@ -651,69 +634,67 @@ export component MainWindow inherits Window {
                                 horizontal-stretch: 1;
                             }
 
-                            // 2. Category ComboBox
+                            // 2. Interactive Tag Chips
                             HorizontalLayout {
-                                spacing: 4px;
+                                spacing: 6px;
                                 alignment: center;
 
-                                Text {
-                                    text: "📁";
-                                    font-size: 12px;
-                                    vertical-alignment: center;
+                                for tag[idx] in root.note_tags : Rectangle {
+                                    height: 24px;
+                                    border-radius: 12px;
+                                    background: #313244;
+                                    border-width: 1px;
+                                    border-color: #45475a;
+
+                                    HorizontalLayout {
+                                        padding-left: 8px;
+                                        padding-right: 6px;
+                                        spacing: 4px;
+                                        alignment: center;
+
+                                        Text {
+                                            text: "#" + tag;
+                                            font-size: 11px;
+                                            font-weight: 500;
+                                            color: #89b4fa;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Rectangle {
+                                            width: 14px;
+                                            height: 14px;
+                                            border-radius: 7px;
+                                            background: tag_del_touch.has-hover ? #45475a : Colors.transparent;
+
+                                            tag_del_touch := TouchArea {
+                                                clicked => {
+                                                    root.remove_tag_requested(idx);
+                                                }
+                                            }
+
+                                            Text {
+                                                text: "×";
+                                                font-size: 12px;
+                                                font-weight: 700;
+                                                color: #a6adc8;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
                                 }
 
-                                ComboBox {
-                                    height: 28px;
-                                    width: 130px;
-                                    model: root.available_categories;
-                                    current-value: root.note_category;
-                                    selected(val) => {
-                                        root.note_category = val;
+                                Button {
+                                    height: 24px;
+                                    text: "+ Tag";
+                                    clicked => {
+                                        root.new_tag_name = "";
+                                        root.show_add_tag_modal = true;
                                     }
                                 }
                             }
 
-                            // 3. Author LineEdit
-                            HorizontalLayout {
-                                spacing: 4px;
-                                alignment: center;
-
-                                Text {
-                                    text: "👤";
-                                    font-size: 11px;
-                                    vertical-alignment: center;
-                                }
-
-                                LineEdit {
-                                    height: 28px;
-                                    font-size: 13px;
-                                    text <=> root.note_author;
-                                    placeholder-text: "Author";
-                                    width: 100px;
-                                }
-                            }
-
-                            // 4. Tags LineEdit
-                            HorizontalLayout {
-                                spacing: 4px;
-                                alignment: center;
-
-                                Text {
-                                    text: "🏷️";
-                                    font-size: 11px;
-                                    vertical-alignment: center;
-                                }
-
-                                LineEdit {
-                                    height: 28px;
-                                    font-size: 13px;
-                                    text <=> root.note_tags;
-                                    placeholder-text: "Tags";
-                                    width: 130px;
-                                }
-                            }
-
-                            // 5. Date Display
+                            // 3. Date Display
                             HorizontalLayout {
                                 spacing: 4px;
                                 alignment: center;
@@ -732,7 +713,7 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // 6. Save Button
+                            // 4. Save Button
                             Button {
                                 height: 28px;
                                 text: "💾 Save";
@@ -741,8 +722,6 @@ export component MainWindow inherits Window {
                                 clicked => {
                                     root.save_note_requested(
                                         root.note_title,
-                                        root.note_author,
-                                        root.note_tags,
                                         root.note_content,
                                         root.note_category
                                     );
@@ -1214,6 +1193,83 @@ export component MainWindow inherits Window {
                         clicked => {
                             root.show_delete_note_modal = false;
                             root.delete_note_confirmed(root.target_note_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ==========================================
+    // MODAL / POPUP OVERLAY: ADD TAG
+    // ==========================================
+    if root.show_add_tag_modal : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000bd;
+
+        TouchArea {}
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 320px;
+            height: 180px;
+            background: #1e1e2e;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #45475a;
+            clip: true;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                alignment: center;
+
+                Text {
+                    text: "Add Tag";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #cdd6f4;
+                    horizontal-alignment: center;
+                }
+
+                tag_input := LineEdit {
+                    height: 28px;
+                    font-size: 13px;
+                    text <=> root.new_tag_name;
+                    placeholder-text: "Tag name...";
+                    accepted => {
+                        if root.new_tag_name != "" {
+                            root.show_add_tag_modal = false;
+                            root.add_tag_confirmed(root.new_tag_name);
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_add_tag_modal = false;
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Add";
+                        primary: true;
+                        enabled: root.new_tag_name != "";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.show_add_tag_modal = false;
+                            root.add_tag_confirmed(root.new_tag_name);
                         }
                     }
                 }

@@ -35,10 +35,6 @@ enum Commands {
         #[arg(short, long)]
         description: Option<String>,
 
-        /// Optional author of the note
-        #[arg(short, long)]
-        author: Option<String>,
-
         /// Optional tags for the note (can be specified multiple times or comma-separated)
         #[arg(short, long, value_delimiter = ',', num_args = 1..)]
         tags: Vec<String>,
@@ -77,7 +73,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             input,
             output,
             description,
-            author,
             tags,
         } => {
             // 1. Verify input file exists
@@ -99,9 +94,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("Untitled Note");
 
-            // 4. Default author to empty string if missing (no dummy names)
-            let author_str = author.unwrap_or_default();
-            let note = Note::new(title, description, author_str, tags, content);
+            let note = Note::new(title, description, tags, content);
 
             // 5. Securely prompt for password without terminal echo and wrap in Zeroizing
             let password_str = rpassword::prompt_password("Enter password to encrypt note: ")
@@ -195,14 +188,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             println!(
                 "Description: {}",
                 note.description.as_deref().unwrap_or("<None>")
-            );
-            println!(
-                "Author:      {}",
-                if note.author.is_empty() {
-                    "<None>"
-                } else {
-                    &note.author
-                }
             );
             println!(
                 "Tags:        {}",

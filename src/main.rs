@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use note_vault::{load_note_decrypted, save_note_encrypted, Note};
+use slint::Model;
 use uuid::Uuid;
 use walkdir::WalkDir;
 use zeroize::{Zeroize, Zeroizing};
@@ -31,8 +32,7 @@ struct Args {
 struct NoteMetaSummary {
     title: String,
     category: String,
-    author: String,
-    tags: String,
+    tags: Vec<String>,
     date: String,
     updated_at: i64,
     file_path: PathBuf,
@@ -156,9 +156,8 @@ fn refresh_models(
 
         if !query.is_empty() {
             let matches_title = meta.title.to_lowercase().contains(&query);
-            let matches_author = meta.author.to_lowercase().contains(&query);
-            let matches_tags = meta.tags.to_lowercase().contains(&query);
-            if !matches_title && !matches_author && !matches_tags {
+            let matches_tags = meta.tags.iter().any(|t| t.to_lowercase().contains(&query));
+            if !matches_title && !matches_tags {
                 continue;
             }
         }
@@ -179,8 +178,7 @@ fn refresh_models(
                 meta.title.into()
             },
             category: meta.category.into(),
-            author: meta.author.into(),
-            tags: meta.tags.into(),
+            tags: meta.tags.join(", ").into(),
             date: format_unix_date(meta.updated_at).into(),
         })
         .collect();
@@ -270,8 +268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_active_note_id("".into());
             ui.set_note_title("".into());
             ui.set_note_content("".into());
-            ui.set_note_author("".into());
-            ui.set_note_tags("".into());
+            ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("".into());
             refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
         }
@@ -407,8 +404,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             } else {
                                 note.title.clone()
                             };
-                            let author = note.author.clone();
-                            let tags = note.tags.join(", ");
+                            let tags = note.tags.clone();
                             let date = format_unix_timestamp(note.updated_at);
                             let updated_at = note.updated_at;
 
@@ -417,7 +413,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 NoteMetaSummary {
                                     title,
                                     category: category_name,
-                                    author,
                                     tags,
                                     date,
                                     updated_at,
@@ -499,8 +494,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_active_note_id(note_id);
                 ui.set_note_title(meta.title.clone().into());
                 ui.set_note_category(meta.category.clone().into());
-                ui.set_note_author(meta.author.clone().into());
-                ui.set_note_tags(meta.tags.clone().into());
+                let tags_slint: Vec<slint::SharedString> = meta
+                    .tags
+                    .iter()
+                    .cloned()
+                    .map(slint::SharedString::from)
+                    .collect();
+                let tags_model: slint::ModelRc<slint::SharedString> =
+                    std::rc::Rc::new(slint::VecModel::from(tags_slint)).into();
+                ui.set_note_tags(tags_model);
                 ui.set_note_date(meta.date.clone().into());
 
                 if let Some(password) = password_opt {
@@ -549,8 +551,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_title("".into());
             ui.set_active_folder("General".into());
             ui.set_note_category("General".into());
-            ui.set_note_author("".into());
-            ui.set_note_tags("".into());
+            ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("".into());
             ui.set_note_content("".into());
             ui.set_search_query("".into());
@@ -571,7 +572,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
-        move |title, author, tags, content, category| {
+        move |title, content, category| {
             let Some(ui) = window_weak.upgrade() else { return };
 
             let password = {
@@ -596,8 +597,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 target_category = "General".to_string();
             }
 
-            let parsed_tags: Vec<String> = tags
-                .split(',')
+            let parsed_tags: Vec<String> = ui
+                .get_note_tags()
+                .iter()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -618,8 +620,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let new_note = Note::new(
                     title.to_string(),
                     None,
-                    author.to_string(),
-                    parsed_tags,
+                    parsed_tags.clone(),
                     content.to_string(),
                 );
 
@@ -656,8 +657,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match load_note_decrypted(&password, &existing_file_path) {
                         Ok(mut existing) => {
                             existing.title = title.to_string();
-                            existing.author = author.to_string();
-                            existing.tags = parsed_tags;
+                            existing.tags = parsed_tags.clone();
                             existing.content = content.to_string();
                             existing.updated_at = now;
                             existing
@@ -669,8 +669,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 id: parsed_uuid,
                                 title: title.to_string(),
                                 description: None,
-                                author: author.to_string(),
-                                tags: parsed_tags,
+                                tags: parsed_tags.clone(),
                                 content: content.to_string(),
                                 created_at: now,
                                 updated_at: now,
@@ -684,8 +683,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         id: parsed_uuid,
                         title: title.to_string(),
                         description: None,
-                        author: author.to_string(),
-                        tags: parsed_tags,
+                        tags: parsed_tags.clone(),
                         content: content.to_string(),
                         created_at: now,
                         updated_at: now,
@@ -719,8 +717,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     NoteMetaSummary {
                         title: title.to_string(),
                         category: target_category.clone(),
-                        author: author.to_string(),
-                        tags: tags.to_string(),
+                        tags: parsed_tags,
                         date: formatted_date.clone(),
                         updated_at: updated_ts,
                         file_path: target_path.clone(),
@@ -753,8 +750,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_active_note_id("new".into());
             ui.set_note_title("Untitled Note".into());
             ui.set_note_category(cur_folder.into());
-            ui.set_note_author("".into());
-            ui.set_note_tags("".into());
+            ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("Just now".into());
             ui.set_note_content("".into());
         }
@@ -956,8 +952,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_active_note_id("".into());
                 ui.set_note_title("".into());
                 ui.set_note_content("".into());
-                ui.set_note_author("".into());
-                ui.set_note_tags("".into());
+                ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                 ui.set_note_date("".into());
             }
 
@@ -1064,13 +1059,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_active_note_id("".into());
                 ui.set_note_title("".into());
                 ui.set_note_content("".into());
-                ui.set_note_author("".into());
-                ui.set_note_tags("".into());
+                ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                 ui.set_note_date("".into());
             }
 
             refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Deleted note {}", note_id);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Remove Tag Requested from Chip
+    // -------------------------------------------------------------
+    main_window.on_remove_tag_requested({
+        let window_weak = window_weak.clone();
+
+        move |idx| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if idx < 0 {
+                return;
+            }
+            let current_tags = ui.get_note_tags();
+            let mut tags_vec: Vec<slint::SharedString> = current_tags.iter().collect();
+            let index = idx as usize;
+            if index < tags_vec.len() {
+                tags_vec.remove(index);
+                let new_model: slint::ModelRc<slint::SharedString> =
+                    std::rc::Rc::new(slint::VecModel::from(tags_vec)).into();
+                ui.set_note_tags(new_model);
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Add Tag Confirmed
+    // -------------------------------------------------------------
+    main_window.on_add_tag_confirmed({
+        let window_weak = window_weak.clone();
+
+        move |new_tag| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let tag_str = new_tag.trim().to_string();
+            if tag_str.is_empty() {
+                return;
+            }
+            let current_tags = ui.get_note_tags();
+            let mut tags_vec: Vec<slint::SharedString> = current_tags.iter().collect();
+            if !tags_vec.iter().any(|t| t.as_str() == tag_str) {
+                tags_vec.push(tag_str.into());
+                let new_model: slint::ModelRc<slint::SharedString> =
+                    std::rc::Rc::new(slint::VecModel::from(tags_vec)).into();
+                ui.set_note_tags(new_model);
+            }
         }
     });
 
