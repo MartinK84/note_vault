@@ -1,4 +1,20 @@
 import { Button, LineEdit, TextEdit, ScrollView, ProgressIndicator, ComboBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { 
+    UnlockModal, 
+    LoadingModal, 
+    UnsavedWarningModal, 
+    DeleteFolderModal, 
+    DeleteNoteModal, 
+    FolderModal, 
+    RenameFolderModal, 
+    MoveNoteModal, 
+    AddTagModal,
+    WelcomeModal 
+} from "modals.slint";
+import { SettingsDialog } from "settings.slint";
+
+export { Theme }
 
 export struct NoteMetadata {
     id: string,
@@ -14,7 +30,7 @@ export component MainWindow inherits Window {
     preferred-height: 740px;
     min-width: 960px;
     min-height: 600px;
-    background: #181825;
+    background: Theme.background;
     default-font-family: "Segoe UI, Inter, sans-serif";
 
     // --- Dynamic 3-Pane Data Models ---
@@ -74,6 +90,25 @@ export component MainWindow inherits Window {
     in-out property <string> note_date: "";
     in-out property <string> note_content: "";
 
+    // --- Settings Modal State ---
+    in-out property <bool> show_settings_modal: false;
+    in-out property <string> settings_vault_path: "";
+    in-out property <bool> settings_use_multithreading: true;
+    in-out property <string> settings_theme: "dark";
+    in property <[string]> theme_options: ["dark", "light"];
+    in-out property <string> settings_cur_pwd: "";
+    in-out property <string> settings_new_pwd: "";
+    in-out property <string> settings_confirm_pwd: "";
+    in property <string> password_change_status: "";
+    in property <bool> password_change_success: false;
+    in property <bool> is_reencrypting: false;
+    in property <float> reencrypt_progress: 0.0;
+
+    // --- Welcome / Onboarding Modal State ---
+    in-out property <bool> show_welcome_modal: false;
+    in-out property <string> welcome_vault_path: "";
+    in-out property <string> welcome_error_message: "";
+
     // --- Callbacks for Rust Backend ---
     callback unlock_requested(string);
     callback lock_vault();
@@ -93,6 +128,14 @@ export component MainWindow inherits Window {
     callback add_tag_confirmed(string); // new tag
     callback search_changed(string);
 
+    // Settings & File callbacks
+    callback open_settings_requested();
+    callback save_settings_requested(string, bool, string); // path, multithreading, theme
+    callback browse_vault_path_requested();
+    callback change_password_requested(string, string, string); // current, new, confirm
+    callback welcome_open_vault_requested(string);
+    callback exit_requested();
+
     // ==========================================
     // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
     // ==========================================
@@ -101,11 +144,11 @@ export component MainWindow inherits Window {
         spacing: 0px;
 
         // -------------------------------------------------------------
-        // PANE 1: FOLDERS LIST (Fixed ~200px, Dark Background #181825)
+        // PANE 1: FOLDERS LIST (Fixed ~210px)
         // -------------------------------------------------------------
         Rectangle {
-            width: 200px;
-            background: #181825;
+            width: 210px;
+            background: Theme.surface_secondary;
 
             // 1px right border divider
             Rectangle {
@@ -113,40 +156,149 @@ export component MainWindow inherits Window {
                 y: 0px;
                 width: 1px;
                 height: parent.height;
-                background: #313244;
+                background: Theme.border;
             }
 
             VerticalLayout {
                 padding: 0px;
                 spacing: 0px;
 
-                // Pane 1 Header (Height 52px)
+                // Top Sleek Menu Bar Strip (Height 26px)
                 Rectangle {
-                    height: 52px;
-                    vertical-stretch: 0;
-                    background: #181825;
+                    height: 26px;
+                    background: Theme.surface_secondary;
 
-                    // Bottom border divider
                     Rectangle {
                         x: 0px;
                         y: parent.height - 1px;
                         width: parent.width;
                         height: 1px;
-                        background: #313244;
+                        background: Theme.border;
                     }
 
                     HorizontalLayout {
-                        padding-top: 12px;
-                        padding-bottom: 12px;
-                        padding-left: 16px;
-                        padding-right: 16px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        alignment: start;
+
+                        file_menu_btn := Rectangle {
+                            width: 38px;
+                            height: 20px;
+                            border-radius: 4px;
+                            background: file_menu_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                            y: (parent.height - self.height) / 2;
+
+                            file_menu_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    file_popup.show();
+                                }
+                            }
+
+                            Text {
+                                text: "File";
+                                font-size: 12px;
+                                color: Theme.text;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            file_popup := PopupWindow {
+                                width: 130px;
+                                height: 72px;
+                                x: 0px;
+                                y: 22px;
+
+                                Rectangle {
+                                    background: Theme.surface;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: Theme.border_strong;
+
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        spacing: 2px;
+
+                                        // Settings Item
+                                        Rectangle {
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: settings_item_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+
+                                            settings_item_touch := TouchArea {
+                                                clicked => {
+                                                    file_popup.close();
+                                                    root.open_settings_requested();
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                spacing: 8px;
+                                                alignment: start;
+
+                                                Text { text: "⚙️"; font-size: 12px; vertical-alignment: center; }
+                                                Text { text: "Settings"; font-size: 12px; color: Theme.text; vertical-alignment: center; }
+                                            }
+                                        }
+
+                                        // Exit Item
+                                        Rectangle {
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: exit_item_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+
+                                            exit_item_touch := TouchArea {
+                                                clicked => {
+                                                    file_popup.close();
+                                                    root.exit_requested();
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                spacing: 8px;
+                                                alignment: start;
+
+                                                Text { text: "❌"; font-size: 12px; vertical-alignment: center; }
+                                                Text { text: "Exit"; font-size: 12px; color: Theme.danger; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Pane 1 Header (Height 48px)
+                Rectangle {
+                    height: 48px;
+                    vertical-stretch: 0;
+                    background: Theme.surface_secondary;
+
+                    Rectangle {
+                        x: 0px;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    HorizontalLayout {
+                        padding-top: 10px;
+                        padding-bottom: 10px;
+                        padding-left: 14px;
+                        padding-right: 14px;
                         spacing: 6px;
 
                         Text {
                             text: "FOLDERS";
                             font-size: 11px;
                             font-weight: 700;
-                            color: #6c7086;
+                            color: Theme.text_muted;
                             letter-spacing: 1px;
                             vertical-alignment: center;
                         }
@@ -157,11 +309,11 @@ export component MainWindow inherits Window {
                         }
 
                         HorizontalLayout {
-                            spacing: 6px;
+                            spacing: 4px;
 
                             Button {
-                                height: 28px;
-                                width: 34px;
+                                height: 26px;
+                                width: 30px;
                                 text: "🔄";
                                 clicked => {
                                     if root.has_unsaved_changes {
@@ -175,8 +327,8 @@ export component MainWindow inherits Window {
                             }
 
                             Button {
-                                height: 28px;
-                                width: 34px;
+                                height: 26px;
+                                width: 30px;
                                 text: "+";
                                 clicked => {
                                     if root.has_unsaved_changes {
@@ -192,8 +344,8 @@ export component MainWindow inherits Window {
                             }
 
                             Button {
-                                height: 28px;
-                                width: 34px;
+                                height: 26px;
+                                width: 30px;
                                 text: "🔒";
                                 clicked => {
                                     root.is_locked = true;
@@ -216,7 +368,7 @@ export component MainWindow inherits Window {
                         for folder in root.folders : Rectangle {
                             height: 32px;
                             border-radius: 6px;
-                            background: root.active_folder == folder ? #313244 : (folder_touch.has-hover ? #1e1e2e : Colors.transparent);
+                            background: root.active_folder == folder ? Theme.surface_active : (folder_touch.has-hover ? Theme.surface_hover : Colors.transparent);
 
                             folder_menu := PopupWindow {
                                 width: 140px;
@@ -225,10 +377,10 @@ export component MainWindow inherits Window {
                                 y: folder_touch.mouse-y;
 
                                 Rectangle {
-                                    background: #1e1e2e;
+                                    background: Theme.surface;
                                     border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: #45475a;
+                                    border-color: Theme.border_strong;
 
                                     VerticalLayout {
                                         padding: 4px;
@@ -239,7 +391,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: ren_touch.has-hover ? #313244 : Colors.transparent;
+                                            background: ren_touch.has-hover ? Theme.surface_hover : Colors.transparent;
 
                                             ren_touch := TouchArea {
                                                 clicked => {
@@ -264,7 +416,7 @@ export component MainWindow inherits Window {
                                                 Text {
                                                     text: "Rename Folder";
                                                     font-size: 12px;
-                                                    color: #cdd6f4;
+                                                    color: Theme.text;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -274,7 +426,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: del_f_touch.has-hover ? #313244 : Colors.transparent;
+                                            background: del_f_touch.has-hover ? Theme.surface_hover : Colors.transparent;
 
                                             del_f_touch := TouchArea {
                                                 clicked => {
@@ -298,7 +450,7 @@ export component MainWindow inherits Window {
                                                 Text {
                                                     text: "Delete Folder";
                                                     font-size: 12px;
-                                                    color: #f38ba8;
+                                                    color: Theme.danger;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -344,7 +496,7 @@ export component MainWindow inherits Window {
                                     text: folder;
                                     font-size: 13px;
                                     font-weight: root.active_folder == folder ? 600 : 400;
-                                    color: root.active_folder == folder ? #89b4fa : #cdd6f4;
+                                    color: root.active_folder == folder ? Theme.primary : Theme.text;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                     overflow: elide;
@@ -354,31 +506,61 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                // Pane 1 Footer Status
+                // Pane 1 Footer Status & Settings Access
                 Rectangle {
-                    height: 28px;
-                    background: #181825;
+                    height: 32px;
+                    background: Theme.surface_secondary;
+
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border;
+                    }
 
                     HorizontalLayout {
                         padding-left: 12px;
                         padding-right: 12px;
                         spacing: 6px;
-                        alignment: start;
+                        alignment: center;
 
                         Rectangle {
                             width: 7px;
                             height: 7px;
                             border-radius: 3px;
-                            background: root.is_locked ? #f38ba8 : #a6e3a1;
+                            background: root.is_locked ? Theme.danger : Theme.success;
                             y: (parent.height - self.height) / 2;
                         }
 
                         Text {
                             text: root.vault_status_text;
                             font-size: 10px;
-                            color: #6c7086;
+                            color: Theme.text_muted;
                             overflow: elide;
+                            horizontal-stretch: 1;
                             vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            width: 22px;
+                            height: 22px;
+                            border-radius: 4px;
+                            background: gear_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+
+                            gear_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.open_settings_requested();
+                                }
+                            }
+
+                            Text {
+                                text: "⚙️";
+                                font-size: 11px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
@@ -386,11 +568,11 @@ export component MainWindow inherits Window {
         }
 
         // -------------------------------------------------------------
-        // PANE 2: NOTES LIST (Fixed ~300px, Background #1e1e2e)
+        // PANE 2: NOTES LIST (Fixed ~300px)
         // -------------------------------------------------------------
         Rectangle {
             width: 300px;
-            background: #1e1e2e;
+            background: Theme.surface;
 
             // 1px right border divider
             Rectangle {
@@ -398,7 +580,7 @@ export component MainWindow inherits Window {
                 y: 0px;
                 width: 1px;
                 height: parent.height;
-                background: #313244;
+                background: Theme.border;
             }
 
             VerticalLayout {
@@ -409,15 +591,14 @@ export component MainWindow inherits Window {
                 Rectangle {
                     height: 52px;
                     vertical-stretch: 0;
-                    background: #1e1e2e;
+                    background: Theme.surface;
 
-                    // Bottom border divider
                     Rectangle {
                         x: 0px;
                         y: parent.height - 1px;
                         width: parent.width;
                         height: 1px;
-                        background: #313244;
+                        background: Theme.border;
                     }
 
                     HorizontalLayout {
@@ -467,9 +648,9 @@ export component MainWindow inherits Window {
                         for note in root.current_notes : Rectangle {
                             height: 60px;
                             border-radius: 6px;
-                            background: root.active_note_id == note.id ? #313244 : (card_touch.has-hover ? #252636 : #181825);
+                            background: root.active_note_id == note.id ? Theme.surface_active : (card_touch.has-hover ? Theme.surface_hover : Theme.surface_secondary);
                             border-width: root.active_note_id == note.id ? 1px : 0px;
-                            border-color: #45475a;
+                            border-color: Theme.border_strong;
 
                             note_menu := PopupWindow {
                                 width: 140px;
@@ -478,10 +659,10 @@ export component MainWindow inherits Window {
                                 y: card_touch.mouse-y;
 
                                 Rectangle {
-                                    background: #1e1e2e;
+                                    background: Theme.surface;
                                     border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: #45475a;
+                                    border-color: Theme.border_strong;
 
                                     VerticalLayout {
                                         padding: 4px;
@@ -492,7 +673,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: move_touch.has-hover ? #313244 : Colors.transparent;
+                                            background: move_touch.has-hover ? Theme.surface_hover : Colors.transparent;
 
                                             move_touch := TouchArea {
                                                 clicked => {
@@ -518,7 +699,7 @@ export component MainWindow inherits Window {
                                                 Text {
                                                     text: "Move Note";
                                                     font-size: 12px;
-                                                    color: #cdd6f4;
+                                                    color: Theme.text;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -528,7 +709,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: del_touch.has-hover ? #313244 : Colors.transparent;
+                                            background: del_touch.has-hover ? Theme.surface_hover : Colors.transparent;
 
                                             del_touch := TouchArea {
                                                 clicked => {
@@ -553,7 +734,7 @@ export component MainWindow inherits Window {
                                                 Text {
                                                     text: "Delete Note";
                                                     font-size: 12px;
-                                                    color: #f38ba8;
+                                                    color: Theme.danger;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -590,16 +771,14 @@ export component MainWindow inherits Window {
                                 spacing: 4px;
                                 alignment: center;
 
-                                // Note Title (Bold)
                                 Text {
                                     text: note.title != "" ? note.title : "Untitled";
                                     font-size: 13px;
                                     font-weight: 600;
-                                    color: root.active_note_id == note.id ? #89b4fa : #cdd6f4;
+                                    color: root.active_note_id == note.id ? Theme.primary : Theme.text;
                                     overflow: elide;
                                 }
 
-                                // Bottom Row: Tags (left) and Date (right)
                                 HorizontalLayout {
                                     alignment: start;
                                     spacing: 6px;
@@ -607,7 +786,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: "🏷️ " + (note.tags != "" ? note.tags : "No tags");
                                         font-size: 11px;
-                                        color: #6c7086;
+                                        color: Theme.text_muted;
                                         overflow: elide;
                                         horizontal-stretch: 1;
                                         vertical-alignment: center;
@@ -616,7 +795,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: note.date;
                                         font-size: 10px;
-                                        color: #6c7086;
+                                        color: Theme.text_muted;
                                         horizontal-alignment: right;
                                         vertical-alignment: center;
                                     }
@@ -624,7 +803,6 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        // Empty State if no notes in active folder
                         if root.current_notes.length == 0 : VerticalLayout {
                             padding-top: 40px;
                             alignment: center;
@@ -633,7 +811,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.search_query != "" ? "No matching notes" : "No notes in this folder";
                                 font-size: 12px;
-                                color: #6c7086;
+                                color: Theme.text_muted;
                                 horizontal-alignment: center;
                             }
                         }
@@ -643,17 +821,16 @@ export component MainWindow inherits Window {
         }
 
         // -------------------------------------------------------------
-        // PANE 3: EDITOR (Flexible Width, Background #1e1e2e)
+        // PANE 3: EDITOR (Flexible Width)
         // -------------------------------------------------------------
         Rectangle {
             horizontal-stretch: 1;
-            background: #1e1e2e;
+            background: Theme.background;
 
             VerticalLayout {
                 padding: 0px;
                 spacing: 0px;
 
-                // Active Note View: Single-line Metadata Header + TextEdit
                 if root.active_note_id != "" : VerticalLayout {
                     padding: 0px;
                     spacing: 0px;
@@ -663,15 +840,14 @@ export component MainWindow inherits Window {
                     Rectangle {
                         height: 52px;
                         vertical-stretch: 0;
-                        background: #1e1e2e;
+                        background: Theme.surface;
 
-                        // Bottom border divider
                         Rectangle {
                             x: 0px;
                             y: parent.height - 1px;
                             width: parent.width;
                             height: 1px;
-                            background: #313244;
+                            background: Theme.border;
                         }
 
                         HorizontalLayout {
@@ -682,7 +858,6 @@ export component MainWindow inherits Window {
                             spacing: 10px;
                             vertical-stretch: 0;
 
-                            // 1. Title LineEdit
                             LineEdit {
                                 height: 28px;
                                 font-size: 13px;
@@ -694,7 +869,7 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // 2. Interactive Tag Chips
+                            // Interactive Tag Chips
                             HorizontalLayout {
                                 spacing: 6px;
                                 alignment: center;
@@ -702,9 +877,9 @@ export component MainWindow inherits Window {
                                 for tag[idx] in root.note_tags : Rectangle {
                                     height: 24px;
                                     border-radius: 12px;
-                                    background: #313244;
+                                    background: Theme.surface_active;
                                     border-width: 1px;
-                                    border-color: #45475a;
+                                    border-color: Theme.border_strong;
 
                                     HorizontalLayout {
                                         padding-left: 8px;
@@ -716,7 +891,7 @@ export component MainWindow inherits Window {
                                             text: "#" + tag;
                                             font-size: 11px;
                                             font-weight: 500;
-                                            color: #89b4fa;
+                                            color: Theme.primary;
                                             vertical-alignment: center;
                                         }
 
@@ -724,7 +899,7 @@ export component MainWindow inherits Window {
                                             width: 14px;
                                             height: 14px;
                                             border-radius: 7px;
-                                            background: tag_del_touch.has-hover ? #45475a : Colors.transparent;
+                                            background: tag_del_touch.has-hover ? Theme.border_strong : Colors.transparent;
 
                                             tag_del_touch := TouchArea {
                                                 clicked => {
@@ -737,7 +912,7 @@ export component MainWindow inherits Window {
                                                 text: "×";
                                                 font-size: 12px;
                                                 font-weight: 700;
-                                                color: #a6adc8;
+                                                color: Theme.text_secondary;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                             }
@@ -755,13 +930,11 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            // Spacer to push Date and Save to the right
                             Rectangle {
                                 horizontal-stretch: 1;
                                 background: transparent;
                             }
 
-                            // 3. Date Display
                             HorizontalLayout {
                                 spacing: 4px;
                                 alignment: center;
@@ -775,18 +948,17 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: root.note_date != "" ? root.note_date : "No date";
                                     font-size: 11px;
-                                    color: #9399b2;
+                                    color: Theme.text_muted;
                                     vertical-alignment: center;
                                 }
                             }
 
-                            // 4. Save Button (Dynamic Styling)
                             save_btn := Rectangle {
                                 height: 28px;
                                 border-radius: 6px;
                                 background: root.has_unsaved_changes
-                                    ? (save_touch.has-hover ? #f5a0b8 : #f38ba8)
-                                    : (save_touch.has-hover ? #585b70 : #45475a);
+                                    ? (save_touch.has-hover ? Theme.danger_hover : Theme.danger)
+                                    : (save_touch.has-hover ? Theme.surface_hover : Theme.surface_active);
                                 animate background { duration: 150ms; }
 
                                 save_touch := TouchArea {
@@ -810,7 +982,7 @@ export component MainWindow inherits Window {
                                         text: "💾 Save";
                                         font-size: 13px;
                                         font-weight: 600;
-                                        color: root.has_unsaved_changes ? #11111b : #a6adc8;
+                                        color: root.has_unsaved_changes ? Theme.primary_text : Theme.text_secondary;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -821,7 +993,7 @@ export component MainWindow inherits Window {
                     // Text Editor Area
                     Rectangle {
                         vertical-stretch: 1;
-                        background: #181825;
+                        background: Theme.background;
 
                         VerticalLayout {
                             padding: 16px;
@@ -836,10 +1008,9 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                // Inactive / Empty Placeholder when no note is selected
                 if root.active_note_id == "" : Rectangle {
                     vertical-stretch: 1;
-                    background: #181825;
+                    background: Theme.background;
 
                     VerticalLayout {
                         alignment: center;
@@ -855,7 +1026,7 @@ export component MainWindow inherits Window {
                             text: "Select a note or create a new one";
                             font-size: 15px;
                             font-weight: 600;
-                            color: #6c7086;
+                            color: Theme.text_muted;
                             horizontal-alignment: center;
                         }
                     }
@@ -865,729 +1036,125 @@ export component MainWindow inherits Window {
     }
 
     // ==========================================
-    // MODAL / POPUP OVERLAY: CREATE FOLDER
+    // MODALS & DIALOGS OVERLAYS
     // ==========================================
-    if root.show_folder_modal : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd;
-
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 360px;
-            height: 180px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                alignment: center;
-
-                Text {
-                    text: "Create New Folder";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: #cdd6f4;
-                    horizontal-alignment: center;
-                }
-
-                folder_name_input := LineEdit {
-                    height: 28px;
-                    font-size: 13px;
-                    text <=> root.new_folder_name;
-                    placeholder-text: "Folder name...";
-                    accepted => {
-                        if root.new_folder_name != "" {
-                            root.show_folder_modal = false;
-                            root.create_folder_confirmed(root.new_folder_name);
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        height: 28px;
-                        text: "Cancel";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_folder_modal = false;
-                        }
-                    }
-
-                    Button {
-                        height: 28px;
-                        text: "Create";
-                        primary: true;
-                        enabled: root.new_folder_name != "";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_folder_modal = false;
-                            root.create_folder_confirmed(root.new_folder_name);
-                        }
-                    }
-                }
-            }
+    if root.show_folder_modal : FolderModal {
+        folder_name <=> root.new_folder_name;
+        cancel => { root.show_folder_modal = false; }
+        create(name) => {
+            root.show_folder_modal = false;
+            root.create_folder_confirmed(name);
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: RENAME FOLDER
-    // ==========================================
-    if root.show_rename_folder_modal : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd;
-
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 380px;
-            height: 200px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                alignment: center;
-
-                Text {
-                    text: "Rename Folder";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: #cdd6f4;
-                    horizontal-alignment: center;
-                }
-
-                rename_input := LineEdit {
-                    height: 28px;
-                    font-size: 13px;
-                    text <=> root.rename_new_name;
-                    placeholder-text: "New folder name...";
-                    accepted => {
-                        if root.rename_new_name != "" {
-                            root.show_rename_folder_modal = false;
-                            root.rename_folder_confirmed(root.target_folder_name, root.rename_new_name);
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        height: 28px;
-                        text: "Cancel";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_rename_folder_modal = false;
-                        }
-                    }
-
-                    Button {
-                        height: 28px;
-                        text: "Rename";
-                        primary: true;
-                        enabled: root.rename_new_name != "" && root.rename_new_name != root.target_folder_name;
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_rename_folder_modal = false;
-                            root.rename_folder_confirmed(root.target_folder_name, root.rename_new_name);
-                        }
-                    }
-                }
-            }
+    if root.show_rename_folder_modal : RenameFolderModal {
+        target_folder_name: root.target_folder_name;
+        new_name <=> root.rename_new_name;
+        cancel => { root.show_rename_folder_modal = false; }
+        rename(old_name, new_name) => {
+            root.show_rename_folder_modal = false;
+            root.rename_folder_confirmed(old_name, new_name);
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: DELETE FOLDER
-    // ==========================================
-    if root.show_delete_folder_modal : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd;
-
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 420px;
-            height: 230px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                alignment: center;
-
-                Text {
-                    text: "Delete Folder";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: #f38ba8;
-                    horizontal-alignment: center;
-                }
-
-                Text {
-                    text: "Delete folder \"" + root.target_folder_name + "\"?";
-                    font-size: 14px;
-                    font-weight: 600;
-                    color: #cdd6f4;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                }
-
-                Text {
-                    text: "Are you sure? This will permanently delete all encrypted notes inside this folder.";
-                    font-size: 12px;
-                    color: #f38ba8;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        height: 28px;
-                        text: "Cancel";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_delete_folder_modal = false;
-                        }
-                    }
-
-                    Button {
-                        height: 28px;
-                        text: "Delete Permanently";
-                        primary: true;
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_delete_folder_modal = false;
-                            root.delete_folder_confirmed(root.target_folder_name);
-                        }
-                    }
-                }
-            }
+    if root.show_delete_folder_modal : DeleteFolderModal {
+        folder_name: root.target_folder_name;
+        cancel => { root.show_delete_folder_modal = false; }
+        delete(name) => {
+            root.show_delete_folder_modal = false;
+            root.delete_folder_confirmed(name);
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: MOVE NOTE
-    // ==========================================
-    if root.show_move_note_modal : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd;
-
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 380px;
-            height: 220px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                alignment: center;
-
-                Text {
-                    text: "Move Note";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: #cdd6f4;
-                    horizontal-alignment: center;
-                }
-
-                Text {
-                    text: "Move \"" + root.target_note_title + "\" to:";
-                    font-size: 13px;
-                    color: #a6adc8;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                }
-
-                HorizontalLayout {
-                    spacing: 6px;
-                    alignment: center;
-
-                    Text {
-                        text: "Folder:";
-                        font-size: 12px;
-                        color: #a6adc8;
-                        vertical-alignment: center;
-                    }
-
-                    ComboBox {
-                        height: 28px;
-                        horizontal-stretch: 1;
-                        model: root.available_categories;
-                        current-value: root.move_target_folder;
-                        selected(val) => {
-                            root.move_target_folder = val;
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        height: 28px;
-                        text: "Cancel";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_move_note_modal = false;
-                        }
-                    }
-
-                    Button {
-                        height: 28px;
-                        text: "Move";
-                        primary: true;
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_move_note_modal = false;
-                            root.move_note_confirmed(root.target_note_id, root.move_target_folder);
-                        }
-                    }
-                }
-            }
+    if root.show_move_note_modal : MoveNoteModal {
+        note_title: root.target_note_title;
+        available_folders: root.available_categories;
+        target_folder <=> root.move_target_folder;
+        cancel => { root.show_move_note_modal = false; }
+        move_note(target) => {
+            root.show_move_note_modal = false;
+            root.move_note_confirmed(root.target_note_id, target);
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: DELETE NOTE
-    // ==========================================
-    if root.show_delete_note_modal : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd;
-
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 400px;
-            height: 210px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                alignment: center;
-
-                Text {
-                    text: "Delete Note";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: #f38ba8;
-                    horizontal-alignment: center;
-                }
-
-                Text {
-                    text: "Are you sure you want to permanently delete \"" + root.target_note_title + "\"?";
-                    font-size: 13px;
-                    color: #cdd6f4;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                }
-
-                Text {
-                    text: "This action cannot be undone.";
-                    font-size: 11px;
-                    color: #a6adc8;
-                    horizontal-alignment: center;
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        height: 28px;
-                        text: "Cancel";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_delete_note_modal = false;
-                        }
-                    }
-
-                    Button {
-                        height: 28px;
-                        text: "Delete";
-                        primary: true;
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_delete_note_modal = false;
-                            root.delete_note_confirmed(root.target_note_id);
-                        }
-                    }
-                }
-            }
+    if root.show_delete_note_modal : DeleteNoteModal {
+        note_title: root.target_note_title;
+        cancel => { root.show_delete_note_modal = false; }
+        delete => {
+            root.show_delete_note_modal = false;
+            root.delete_note_confirmed(root.target_note_id);
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: ADD TAG
-    // ==========================================
-    if root.show_add_tag_modal : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd;
-
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 320px;
-            height: 180px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                alignment: center;
-
-                Text {
-                    text: "Add Tag";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: #cdd6f4;
-                    horizontal-alignment: center;
-                }
-
-                tag_input := LineEdit {
-                    height: 28px;
-                    font-size: 13px;
-                    text <=> root.new_tag_name;
-                    placeholder-text: "Tag name...";
-                    accepted => {
-                        if root.new_tag_name != "" {
-                            root.show_add_tag_modal = false;
-                            root.has_unsaved_changes = true;
-                            root.add_tag_confirmed(root.new_tag_name);
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        height: 28px;
-                        text: "Cancel";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_add_tag_modal = false;
-                        }
-                    }
-
-                    Button {
-                        height: 28px;
-                        text: "Add";
-                        primary: true;
-                        enabled: root.new_tag_name != "";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_add_tag_modal = false;
-                            root.has_unsaved_changes = true;
-                            root.add_tag_confirmed(root.new_tag_name);
-                        }
-                    }
-                }
-            }
+    if root.show_add_tag_modal : AddTagModal {
+        tag_name <=> root.new_tag_name;
+        cancel => { root.show_add_tag_modal = false; }
+        add(name) => {
+            root.show_add_tag_modal = false;
+            root.has_unsaved_changes = true;
+            root.add_tag_confirmed(name);
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: UNSAVED CHANGES WARNING
-    // ==========================================
-    if root.show_unsaved_warning : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd;
-
-        TouchArea {}
-
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 420px;
-            height: 190px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                alignment: center;
-
-                Text {
-                    text: "⚠️ Unsaved Changes";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: #f38ba8;
-                    horizontal-alignment: center;
-                }
-
-                Text {
-                    text: "You have unsaved changes. Do you want to discard them?";
-                    font-size: 13px;
-                    color: #cdd6f4;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                }
-
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        height: 28px;
-                        text: "Cancel";
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.show_unsaved_warning = false;
-                            root.pending_action_type = "";
-                            root.pending_action_payload = "";
-                        }
-                    }
-
-                    Button {
-                        height: 28px;
-                        text: "Discard Changes";
-                        primary: true;
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.discard_changes_confirmed();
-                        }
-                    }
-                }
-            }
+    if root.show_unsaved_warning : UnsavedWarningModal {
+        cancel => {
+            root.show_unsaved_warning = false;
+            root.pending_action_type = "";
+            root.pending_action_payload = "";
+        }
+        discard => {
+            root.discard_changes_confirmed();
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: VAULT PASSWORD UNLOCK
-    // ==========================================
-    if root.is_locked && !root.is_loading : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd; // Dark semi-transparent scrim
-
-        // Scrim touch interceptor so clicks don't pass through to underlying UI
-        TouchArea {}
-
-        // Centered Modal Window Card
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 440px;
-            height: 290px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
-
-            VerticalLayout {
-                padding: 28px;
-                spacing: 16px;
-                alignment: center;
-
-                // Lock Icon & Heading
-                VerticalLayout {
-                    spacing: 6px;
-                    alignment: center;
-
-                    Text {
-                        text: "🔐";
-                        font-size: 32px;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: "Unlock Secure Vault";
-                        font-size: 20px;
-                        font-weight: 700;
-                        color: #cdd6f4;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: "Enter your master passphrase to decrypt and access your notes.";
-                        font-size: 13px;
-                        color: #a6adc8;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
-                    }
-                }
-
-                // Password Input Field
-                pwd_input := LineEdit {
-                    text <=> root.unlock_password;
-                    input-type: password;
-                    placeholder-text: "Master Vault Password...";
-                    font-size: 14px;
-                    accepted => {
-                        root.unlock_requested(root.unlock_password);
-                    }
-                }
-
-                // Error message (if any)
-                if root.unlock_error_message != "" : Text {
-                    text: root.unlock_error_message;
-                    font-size: 12px;
-                    color: #f38ba8; // Danger red
-                    horizontal-alignment: center;
-                }
-
-                // Unlock Action Button
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
-                        text: "Unlock Vault";
-                        primary: true;
-                        horizontal-stretch: 1;
-                        clicked => {
-                            root.unlock_requested(root.unlock_password);
-                        }
-                    }
-                }
-            }
+    if root.is_locked && !root.is_loading && !root.show_welcome_modal : UnlockModal {
+        password <=> root.unlock_password;
+        error_message: root.unlock_error_message;
+        unlock(pwd) => {
+            root.unlock_requested(pwd);
         }
     }
 
-    // ==========================================
-    // MODAL / POPUP OVERLAY: LOADING / DECRYPTION PROGRESS
-    // ==========================================
-    if root.is_loading : Rectangle {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        background: #000000bd; // Dark semi-transparent scrim
+    if root.is_loading : LoadingModal {
+        progress: root.loading_progress;
+        status_text: root.loading_status_text;
+    }
 
-        // Scrim touch interceptor so clicks don't pass through to underlying UI
-        TouchArea {}
+    if root.show_welcome_modal : WelcomeModal {
+        vault_path <=> root.welcome_vault_path;
+        error_message: root.welcome_error_message;
+        browse => {
+            root.browse_vault_path_requested();
+        }
+        open_vault(path) => {
+            root.welcome_open_vault_requested(path);
+        }
+    }
 
-        // Centered Progress Modal Window Card
-        Rectangle {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 420px;
-            height: 190px;
-            background: #1e1e2e;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #45475a;
-            clip: true;
+    if root.show_settings_modal : SettingsDialog {
+        vault_path <=> root.settings_vault_path;
+        use_multithreading <=> root.settings_use_multithreading;
+        theme <=> root.settings_theme;
+        theme_options: root.theme_options;
+        current_password <=> root.settings_cur_pwd;
+        new_password <=> root.settings_new_pwd;
+        confirm_password <=> root.settings_confirm_pwd;
+        password_change_status: root.password_change_status;
+        password_change_success: root.password_change_success;
+        is_reencrypting: root.is_reencrypting;
+        reencrypt_progress: root.reencrypt_progress;
 
-            VerticalLayout {
-                padding: 28px;
-                spacing: 18px;
-                alignment: center;
-
-                HorizontalLayout {
-                    spacing: 10px;
-                    alignment: center;
-
-                    Text {
-                        text: "🔄";
-                        font-size: 24px;
-                        vertical-alignment: center;
-                    }
-
-                    Text {
-                        text: "Decrypting Vault Notes";
-                        font-size: 18px;
-                        font-weight: 700;
-                        color: #cdd6f4;
-                        vertical-alignment: center;
-                    }
-                }
-
-                VerticalLayout {
-                    spacing: 8px;
-
-                    HorizontalLayout {
-                        Text {
-                            text: root.loading_status_text != "" ? root.loading_status_text : "Decrypting notes...";
-                            font-size: 12px;
-                            color: #a6adc8;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: @tr("{0}%", Math.round(root.loading_progress * 100));
-                            font-size: 12px;
-                            font-weight: 600;
-                            color: #89b4fa;
-                        }
-                    }
-
-                    ProgressIndicator {
-                        progress: root.loading_progress;
-                    }
-                }
-            }
+        browse_path_clicked => {
+            root.browse_vault_path_requested();
+        }
+        save_settings(path, multithreading, theme) => {
+            root.save_settings_requested(path, multithreading, theme);
+        }
+        change_password(cur, new_pwd, confirm) => {
+            root.change_password_requested(cur, new_pwd, confirm);
+        }
+        close_clicked => {
+            root.show_settings_modal = false;
         }
     }
 }

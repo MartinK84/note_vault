@@ -1,0 +1,33 @@
+export global Theme {
+    in-out property <string> mode: "dark";
+    out property <bool> is_dark: mode == "dark";
+
+    // Surface & Layout Backgrounds
+    out property <color> background: is_dark ? #181825 : #f4f5f9;
+    out property <color> surface: is_dark ? #1e1e2e : #ffffff;
+    out property <color> surface_secondary: is_dark ? #181825 : #edf0f6;
+    out property <color> surface_hover: is_dark ? #252636 : #e2e6f0;
+    out property <color> surface_active: is_dark ? #313244 : #d3d8e5;
+
+    // Borders & Dividers
+    out property <color> border: is_dark ? #313244 : #dbe0ec;
+    out property <color> border_strong: is_dark ? #45475a : #c2c7d7;
+
+    // Typography
+    out property <color> text: is_dark ? #cdd6f4 : #2d3142;
+    out property <color> text_secondary: is_dark ? #a6adc8 : #5c6275;
+    out property <color> text_muted: is_dark ? #6c7086 : #8c93a8;
+
+    // Brand / Accents
+    out property <color> primary: #89b4fa;
+    out property <color> primary_hover: #b4befe;
+    out property <color> primary_text: #11111b;
+
+    // Status Colors
+    out property <color> danger: #f38ba8;
+    out property <color> danger_hover: #f5a0b8;
+    out property <color> success: #a6e3a1;
+
+    // Overlays
+    out property <color> modal_scrim: #000000bd;
+}

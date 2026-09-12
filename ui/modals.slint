@@ -1,0 +1,848 @@
+import { Button, LineEdit, ProgressIndicator, ComboBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+// ==========================================
+// MODAL: VAULT PASSWORD UNLOCK
+// ==========================================
+export component UnlockModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in-out property <string> password: "";
+    in property <string> error_message: "";
+    callback unlock(string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 440px;
+        height: 290px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 28px;
+            spacing: 16px;
+            alignment: center;
+
+            VerticalLayout {
+                spacing: 6px;
+                alignment: center;
+
+                Text {
+                    text: "🔐";
+                    font-size: 32px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Unlock Secure Vault";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Enter your master passphrase to decrypt and access your notes.";
+                    font-size: 13px;
+                    color: Theme.text_secondary;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            pwd_input := LineEdit {
+                text <=> root.password;
+                input-type: InputType.password;
+                placeholder-text: "Master Vault Password...";
+                font-size: 14px;
+                accepted => {
+                    root.unlock(root.password);
+                }
+            }
+
+            if root.error_message != "" : Text {
+                text: root.error_message;
+                font-size: 12px;
+                color: Theme.danger;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    text: "Unlock Vault";
+                    primary: true;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.unlock(root.password);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: LOADING / DECRYPTION PROGRESS
+// ==========================================
+export component LoadingModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in property <float> progress: 0.0;
+    in property <string> status_text: "";
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: 190px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 28px;
+            spacing: 18px;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: center;
+
+                Text {
+                    text: "🔄";
+                    font-size: 24px;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "Decrypting Vault Notes";
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+
+                HorizontalLayout {
+                    Text {
+                        text: root.status_text != "" ? root.status_text : "Decrypting notes...";
+                        font-size: 12px;
+                        color: Theme.text_secondary;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: @tr("{0}%", Math.round(root.progress * 100));
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: Theme.primary;
+                    }
+                }
+
+                ProgressIndicator {
+                    progress: root.progress;
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: UNSAVED CHANGES WARNING
+// ==========================================
+export component UnsavedWarningModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    callback cancel();
+    callback discard();
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: 190px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: "⚠️ Unsaved Changes";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.danger;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "You have unsaved changes. Do you want to discard them?";
+                font-size: 13px;
+                color: Theme.text;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Discard Changes";
+                    primary: true;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.discard();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: DELETE FOLDER WARNING
+// ==========================================
+export component DeleteFolderModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in property <string> folder_name: "";
+    callback cancel();
+    callback delete(string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: 230px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: "Delete Folder";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.danger;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Delete folder \"" + root.folder_name + "\"?";
+                font-size: 14px;
+                font-weight: 600;
+                color: Theme.text;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+
+            Text {
+                text: "Are you sure? This will permanently delete all encrypted notes inside this folder.";
+                font-size: 12px;
+                color: Theme.danger;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Delete Permanently";
+                    primary: true;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.delete(root.folder_name);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: DELETE NOTE WARNING
+// ==========================================
+export component DeleteNoteModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in property <string> note_title: "";
+    callback cancel();
+    callback delete();
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 400px;
+        height: 210px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: "Delete Note";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.danger;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Are you sure you want to permanently delete \"" + root.note_title + "\"?";
+                font-size: 13px;
+                color: Theme.text;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: "This action cannot be undone.";
+                font-size: 11px;
+                color: Theme.text_secondary;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Delete";
+                    primary: true;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.delete();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: CREATE NEW FOLDER
+// ==========================================
+export component FolderModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in-out property <string> folder_name: "";
+    callback cancel();
+    callback create(string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 360px;
+        height: 180px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: "Create New Folder";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+
+            folder_name_input := LineEdit {
+                height: 28px;
+                font-size: 13px;
+                text <=> root.folder_name;
+                placeholder-text: "Folder name...";
+                accepted => {
+                    if root.folder_name != "" {
+                        root.create(root.folder_name);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Create";
+                    primary: true;
+                    enabled: root.folder_name != "";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.create(root.folder_name);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: RENAME FOLDER
+// ==========================================
+export component RenameFolderModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in property <string> target_folder_name: "";
+    in-out property <string> new_name: "";
+    callback cancel();
+    callback rename(string, string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        height: 200px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: "Rename Folder";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+
+            rename_input := LineEdit {
+                height: 28px;
+                font-size: 13px;
+                text <=> root.new_name;
+                placeholder-text: "New folder name...";
+                accepted => {
+                    if root.new_name != "" && root.new_name != root.target_folder_name {
+                        root.rename(root.target_folder_name, root.new_name);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Rename";
+                    primary: true;
+                    enabled: root.new_name != "" && root.new_name != root.target_folder_name;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.rename(root.target_folder_name, root.new_name);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: MOVE NOTE
+// ==========================================
+export component MoveNoteModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in property <string> note_title: "";
+    in property <[string]> available_folders: [];
+    in-out property <string> target_folder: "General";
+    callback cancel();
+    callback move_note(string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        height: 220px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: "Move Note";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Move \"" + root.note_title + "\" to:";
+                font-size: 13px;
+                color: Theme.text_secondary;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: center;
+
+                Text {
+                    text: "Folder:";
+                    font-size: 12px;
+                    color: Theme.text_secondary;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    height: 28px;
+                    horizontal-stretch: 1;
+                    model: root.available_folders;
+                    current-value: root.target_folder;
+                    selected(val) => {
+                        root.target_folder = val;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Move";
+                    primary: true;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.move_note(root.target_folder);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: ADD TAG
+// ==========================================
+export component AddTagModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in-out property <string> tag_name: "";
+    callback cancel();
+    callback add(string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 320px;
+        height: 180px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: "Add Tag";
+                font-size: 16px;
+                font-weight: 700;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+
+            tag_input := LineEdit {
+                height: 28px;
+                font-size: 13px;
+                text <=> root.tag_name;
+                placeholder-text: "Tag name...";
+                accepted => {
+                    if root.tag_name != "" {
+                        root.add(root.tag_name);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Add";
+                    primary: true;
+                    enabled: root.tag_name != "";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.add(root.tag_name);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: ONBOARDING / STARTUP WELCOME MODAL
+// ==========================================
+export component WelcomeModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    in-out property <string> vault_path: "";
+    in property <string> error_message: "";
+    callback browse();
+    callback open_vault(string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 480px;
+        height: 310px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 28px;
+            spacing: 16px;
+            alignment: center;
+
+            VerticalLayout {
+                spacing: 6px;
+                alignment: center;
+
+                Text {
+                    text: "🗄️";
+                    font-size: 36px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Welcome to NoteVault";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Please select a directory on your system to store your encrypted notes.";
+                    font-size: 13px;
+                    color: Theme.text_secondary;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                LineEdit {
+                    text: root.vault_path;
+                    placeholder-text: "No vault directory selected...";
+                    font-size: 13px;
+                    enabled: false;
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: "Browse...";
+                    clicked => {
+                        root.browse();
+                    }
+                }
+            }
+
+            if root.error_message != "" : Text {
+                text: root.error_message;
+                font-size: 12px;
+                color: Theme.danger;
+                horizontal-alignment: center;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    text: "Open Vault";
+                    primary: true;
+                    enabled: root.vault_path != "";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.open_vault(root.vault_path);
+                    }
+                }
+            }
+        }
+    }
+}

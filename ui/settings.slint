@@ -1,0 +1,279 @@
+import { Button, LineEdit, ComboBox, CheckBox, ProgressIndicator } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component SettingsDialog inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.modal_scrim;
+
+    // Config Properties
+    in-out property <string> vault_path: "";
+    in-out property <bool> use_multithreading: true;
+    in-out property <string> theme: "dark";
+    in property <[string]> theme_options: ["dark", "light"];
+
+    // Password Change Properties
+    in-out property <string> current_password: "";
+    in-out property <string> new_password: "";
+    in-out property <string> confirm_password: "";
+    in property <string> password_change_status: "";
+    in property <bool> password_change_success: false;
+    in property <bool> is_reencrypting: false;
+    in property <float> reencrypt_progress: 0.0;
+
+    // Callbacks
+    callback browse_path_clicked();
+    callback save_settings(string, bool, string);
+    callback change_password(string, string, string);
+    callback close_clicked();
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 520px;
+        height: 580px;
+        background: Theme.surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_strong;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            // Dialog Header Bar
+            HorizontalLayout {
+                Text {
+                    text: "⚙️ Settings";
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 6px;
+                    background: close_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+
+                    close_touch := TouchArea {
+                        clicked => {
+                            root.close_clicked();
+                        }
+                    }
+
+                    Text {
+                        text: "✕";
+                        font-size: 14px;
+                        color: Theme.text_secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Section 1: Vault Location
+            VerticalLayout {
+                spacing: 6px;
+
+                Text {
+                    text: "Vault Directory";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Theme.text_secondary;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    LineEdit {
+                        text: root.vault_path;
+                        font-size: 13px;
+                        enabled: false;
+                        horizontal-stretch: 1;
+                    }
+
+                    Button {
+                        text: "Browse...";
+                        clicked => {
+                            root.browse_path_clicked();
+                        }
+                    }
+                }
+            }
+
+            // Section 2: Preferences (Decryption & Theme)
+            VerticalLayout {
+                spacing: 10px;
+
+                CheckBox {
+                    text: "Use multi-core decryption";
+                    checked <=> root.use_multithreading;
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+
+                    Text {
+                        text: "Theme:";
+                        font-size: 13px;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+
+                    ComboBox {
+                        width: 140px;
+                        height: 28px;
+                        model: root.theme_options;
+                        current-value: root.theme;
+                        selected(val) => {
+                            root.theme = val;
+                        }
+                    }
+                }
+            }
+
+            // Section 3: Password Change Box
+            Rectangle {
+                background: Theme.surface_secondary;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    Text {
+                        text: "🔐 Change Master Password";
+                        font-size: 13px;
+                        font-weight: 700;
+                        color: Theme.text;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 3px;
+
+                            Text {
+                                text: "Current Password";
+                                font-size: 11px;
+                                color: Theme.text_muted;
+                            }
+
+                            cur_pwd := LineEdit {
+                                text <=> root.current_password;
+                                input-type: InputType.password;
+                                font-size: 12px;
+                                placeholder-text: "Current password...";
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 3px;
+
+                            Text {
+                                text: "New Password";
+                                font-size: 11px;
+                                color: Theme.text_muted;
+                            }
+
+                            new_pwd := LineEdit {
+                                text <=> root.new_password;
+                                input-type: InputType.password;
+                                font-size: 12px;
+                                placeholder-text: "New password...";
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 3px;
+
+                            Text {
+                                text: "Confirm New";
+                                font-size: 11px;
+                                color: Theme.text_muted;
+                            }
+
+                            confirm_pwd := LineEdit {
+                                text <=> root.confirm_password;
+                                input-type: InputType.password;
+                                font-size: 12px;
+                                placeholder-text: "Confirm new...";
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        Button {
+                            text: "Change Password";
+                            enabled: !root.is_reencrypting && root.current_password != "" && root.new_password != "" && root.confirm_password != "";
+                            clicked => {
+                                root.change_password(root.current_password, root.new_password, root.confirm_password);
+                            }
+                        }
+
+                        if root.password_change_status != "" : Text {
+                            text: root.password_change_status;
+                            font-size: 11px;
+                            color: root.password_change_success ? Theme.success : Theme.danger;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+
+                    if root.is_reencrypting : VerticalLayout {
+                        spacing: 4px;
+
+                        ProgressIndicator {
+                            progress: root.reencrypt_progress;
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                background: Colors.transparent;
+            }
+
+            // Footer Action Buttons
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+
+                Button {
+                    text: "Close";
+                    clicked => {
+                        root.close_clicked();
+                    }
+                }
+
+                Button {
+                    text: "Save Settings";
+                    primary: true;
+                    clicked => {
+                        root.save_settings(root.vault_path, root.use_multithreading, root.theme);
+                    }
+                }
+            }
+        }
+    }
+}

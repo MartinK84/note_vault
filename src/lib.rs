@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use walkdir::WalkDir;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
@@ -13,6 +14,8 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
+
+pub mod config;
 
 /// Cryptographic binary file header constants.
 pub const SALT_LEN: usize = 32;       // 256-bit salt for Argon2id
@@ -253,6 +256,106 @@ pub fn load_note_decrypted(
     Ok(note)
 }
 
+/// Atomically re-encrypts all `.vault` files found recursively within `vault_dir`.
+///
+/// 1. Finds all files with `.vault` extension (excluding `.vault.new` and temporary files).
+/// 2. Decrypts each file using `current_password` into memory (`Note`), then encrypts it using
+///    `new_password` and writes it to `<filename>.vault.new`. The decrypted in-memory `Note` is zeroized.
+/// 3. If any file fails during decryption or write, all created `.vault.new` files are removed
+///    and an error is returned. The original `.vault` files remain completely untouched.
+/// 4. Once all files have been safely staged as `.vault.new`, they are atomically renamed to `.vault`.
+///
+/// Returns the number of notes successfully re-encrypted.
+pub fn reencrypt_vault_atomic<F>(
+    vault_dir: &Path,
+    current_password: &str,
+    new_password: &str,
+    mut progress_callback: F,
+) -> Result<usize, Box<dyn Error>>
+where
+    F: FnMut(usize, usize),
+{
+    let mut vault_files: Vec<PathBuf> = Vec::new();
+    for entry in WalkDir::new(vault_dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let p = entry.path();
+        if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("vault") {
+            vault_files.push(p.to_path_buf());
+        }
+    }
+
+    let total = vault_files.len();
+    if total == 0 {
+        return Ok(0);
+    }
+
+    let staging_pairs: Vec<(PathBuf, PathBuf)> = vault_files
+        .into_iter()
+        .map(|p| {
+            let new_path = PathBuf::from(format!("{}.new", p.display()));
+            (p, new_path)
+        })
+        .collect();
+
+    // Clean up any stale staging files
+    for (_, new_path) in &staging_pairs {
+        if new_path.exists() {
+            let _ = fs::remove_file(new_path);
+        }
+    }
+
+    let mut failure: Option<Box<dyn Error>> = None;
+
+    // Step 1: Decrypt and stage each file to .vault.new
+    for (idx, (orig_path, new_path)) in staging_pairs.iter().enumerate() {
+        progress_callback(idx + 1, total);
+
+        let mut note = match load_note_decrypted(current_password, orig_path) {
+            Ok(n) => n,
+            Err(e) => {
+                failure = Some(format!(
+                    "Failed to decrypt note {:?}: {}",
+                    orig_path.file_name().unwrap_or_default(),
+                    e
+                ).into());
+                break;
+            }
+        };
+
+        let save_res = save_note_encrypted(&note, new_password, new_path);
+        note.zeroize();
+
+        if let Err(e) = save_res {
+            failure = Some(format!(
+                "Failed to write re-encrypted note {:?}: {}",
+                new_path.file_name().unwrap_or_default(),
+                e
+            ).into());
+            break;
+        }
+    }
+
+    // If any failure occurred during staging, wipe staging files and return error
+    if let Some(err) = failure {
+        for (_, new_path) in &staging_pairs {
+            if new_path.exists() {
+                let _ = fs::remove_file(new_path);
+            }
+        }
+        return Err(err);
+    }
+
+    // Step 2: Atomic commit - rename all .vault.new to .vault
+    for (orig_path, new_path) in &staging_pairs {
+        fs::rename(new_path, orig_path)?;
+    }
+
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +499,79 @@ mod tests {
         assert_eq!(note.created_at, 0);
         assert_eq!(note.updated_at, 0);
         assert_eq!(note.id, Uuid::nil());
+    }
+
+    #[test]
+    fn test_reencrypt_vault_atomic_success() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_reenc_{}", Uuid::new_v4()));
+        let folder_a = temp_dir.join("General");
+        let folder_b = temp_dir.join("Work");
+        fs::create_dir_all(&folder_a).unwrap();
+        fs::create_dir_all(&folder_b).unwrap();
+
+        let note1 = Note::new("Note 1", vec!["tag1".to_string()], "Secret 1");
+        let note2 = Note::new("Note 2", vec!["tag2".to_string()], "Secret 2");
+
+        let p1 = folder_a.join("note1.vault");
+        let p2 = folder_b.join("note2.vault");
+
+        let old_pwd = "OldMasterPassword123!";
+        let new_pwd = "NewMasterPassword456?";
+
+        save_note_encrypted(&note1, old_pwd, &p1).unwrap();
+        save_note_encrypted(&note2, old_pwd, &p2).unwrap();
+
+        let mut progress_reports = Vec::new();
+        let reencrypted_count = reencrypt_vault_atomic(&temp_dir, old_pwd, new_pwd, |done, total| {
+            progress_reports.push((done, total));
+        }).expect("Atomic re-encryption should succeed");
+
+        assert_eq!(reencrypted_count, 2);
+        assert_eq!(progress_reports, vec![(1, 2), (2, 2)]);
+
+        // No staging files left over
+        assert!(!folder_a.join("note1.vault.new").exists());
+        assert!(!folder_b.join("note2.vault.new").exists());
+
+        // Decrypt with old password should now fail
+        assert!(load_note_decrypted(old_pwd, &p1).is_err());
+        assert!(load_note_decrypted(old_pwd, &p2).is_err());
+
+        // Decrypt with new password must succeed and preserve content
+        let dec1 = load_note_decrypted(new_pwd, &p1).unwrap();
+        let dec2 = load_note_decrypted(new_pwd, &p2).unwrap();
+        assert_eq!(dec1.title, "Note 1");
+        assert_eq!(dec1.content, "Secret 1");
+        assert_eq!(dec2.title, "Note 2");
+        assert_eq!(dec2.content, "Secret 2");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_reencrypt_vault_atomic_aborts_on_wrong_password() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_reenc_fail_{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let note = Note::new("Secret Note", Vec::new(), "Critical Content");
+        let correct_pwd = "CorrectMaster123!";
+        let wrong_pwd = "WrongOldPassword!";
+        let new_pwd = "AttemptedNewPassword!";
+
+        let p = temp_dir.join("note.vault");
+        save_note_encrypted(&note, correct_pwd, &p).unwrap();
+
+        let result = reencrypt_vault_atomic(&temp_dir, wrong_pwd, new_pwd, |_, _| {});
+        assert!(result.is_err(), "Re-encryption with wrong old password must fail");
+
+        // Staging file must be wiped
+        assert!(!temp_dir.join("note.vault.new").exists());
+
+        // Original file must remain intact and decryptable with correct password
+        let dec = load_note_decrypted(correct_pwd, &p).unwrap();
+        assert_eq!(dec.title, "Secret Note");
+        assert_eq!(dec.content, "Critical Content");
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

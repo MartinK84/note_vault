@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
+use note_vault::config::AppConfig;
 use note_vault::{load_note_decrypted, save_note_encrypted, Note};
 use rayon::prelude::*;
 use slint::Model;
@@ -24,9 +25,9 @@ slint::include_modules!();
     long_about = "NoteVault securely encrypts and decrypts notes using Argon2id and XChaCha20-Poly1305."
 )]
 struct Args {
-    /// Path to the encrypted vault directory (mandatory)
+    /// Path to the encrypted vault directory (optional, temporarily overrides config.json)
     #[arg(short, long, value_name = "PATH")]
-    vault_path: PathBuf,
+    vault_path: Option<PathBuf>,
 }
 
 /// Metadata extracted from a decrypted note, stored without plaintext content.
@@ -77,7 +78,7 @@ fn parse_unix_timestamp(ts: i64) -> (u32, u32, u32, u64, u64, u64) {
     (year as u32, month, day, hours, minutes, seconds)
 }
 
-/// Formats a Unix timestamp (seconds) into a readable UTC date string without external dependencies.
+/// Formats a Unix timestamp (seconds) into a readable UTC date string.
 fn format_unix_timestamp(ts: i64) -> String {
     if ts <= 0 {
         return "Unknown".to_string();
@@ -104,6 +105,10 @@ fn refresh_models(
     active_folder: &Arc<Mutex<String>>,
     search_query: &Arc<Mutex<String>>,
 ) {
+    if !vault_path.exists() {
+        return;
+    }
+
     // 1. Scan for flat root directories under vault_path
     let mut folder_set = std::collections::BTreeSet::new();
 
@@ -125,7 +130,7 @@ fn refresh_models(
         }
     }
 
-    // Also include any categories found in the in-memory metadata store
+    // Include categories from in-memory metadata store
     {
         let store = metadata_store.lock().unwrap();
         for meta in store.values() {
@@ -140,8 +145,8 @@ fn refresh_models(
     // 2. Validate and retrieve current active_folder
     let current_active_folder = {
         let mut active = active_folder.lock().unwrap();
-        if active.is_empty() || !folders_list.contains(&*active) {
-            *active = folders_list.first().cloned().unwrap_or_default();
+        if active.is_empty() || (!folders_list.is_empty() && !folders_list.contains(&*active)) {
+            *active = folders_list.first().cloned().unwrap_or_else(|| "General".to_string());
         }
         active.clone()
     };
@@ -168,7 +173,6 @@ fn refresh_models(
         filtered_notes.push((id.clone(), meta.clone()));
     }
 
-    // Sort notes by updated date (newest first)
     filtered_notes.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
 
     let note_models: Vec<NoteMetadata> = filtered_notes
@@ -207,7 +211,7 @@ fn refresh_models(
     ui.set_active_folder(current_active_folder.into());
     ui.set_current_notes(current_notes_model);
 
-    ui.set_vault_status_text(format!("{} total note(s)", total_notes).into());
+    ui.set_vault_status_text(format!("{} note(s)", total_notes).into());
 }
 
 /// Loads a decrypted note into the UI editor pane and resets `has_unsaved_changes` to false.
@@ -265,21 +269,21 @@ fn load_note_into_ui(
     }
 }
 
-/// Reloads and re-decrypts all notes in the vault in parallel using Rayon,
-/// displaying the progress modal popup and refreshing models upon completion.
+/// Reloads and re-decrypts all notes in the vault,
+/// respecting `use_multithreading` (parallel with Rayon or sequential).
 fn trigger_vault_reload(
     password: Zeroizing<String>,
     window_weak: slint::Weak<MainWindow>,
-    vault_dir: Arc<PathBuf>,
+    vault_dir: Arc<Mutex<PathBuf>>,
     meta_store: Arc<Mutex<HashMap<String, NoteMetaSummary>>>,
     session_pass: Arc<Mutex<Option<Zeroizing<String>>>>,
     a_folder: Arc<Mutex<String>>,
     s_query: Arc<Mutex<String>>,
+    use_multi: Arc<AtomicBool>,
     is_initial_unlock: bool,
 ) {
     let Some(ui) = window_weak.upgrade() else { return };
 
-    // Reset UI state and show loading progress popup
     ui.set_is_loading(true);
     ui.set_loading_progress(0.0);
     ui.set_loading_status_text("Discovering encrypted notes...".into());
@@ -293,8 +297,10 @@ fn trigger_vault_reload(
     let weak = window_weak.clone();
 
     thread::spawn(move || {
+        let current_vault_path = vault_dir.lock().unwrap().clone();
+
         let mut vault_files: Vec<PathBuf> = Vec::new();
-        for entry in WalkDir::new(&*vault_dir)
+        for entry in WalkDir::new(&current_vault_path)
             .follow_links(false)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -308,12 +314,11 @@ fn trigger_vault_reload(
         let total_files = vault_files.len();
 
         if total_files == 0 {
-            // Empty vault: store password in session, clear meta store and unlock
             *session_pass.lock().unwrap() = Some(password);
             meta_store.lock().unwrap().clear();
 
             let weak = weak.clone();
-            let v_path = Arc::clone(&vault_dir);
+            let v_path = current_vault_path.clone();
             let m_store = Arc::clone(&meta_store);
             let af = Arc::clone(&a_folder);
             let sq = Arc::clone(&s_query);
@@ -333,75 +338,78 @@ fn trigger_vault_reload(
         let completed_count = Arc::new(AtomicUsize::new(0));
         let decrypt_failed = Arc::new(AtomicBool::new(false));
 
-        let decrypted_items: Vec<(String, NoteMetaSummary)> = vault_files
-            .into_par_iter()
-            .filter_map(|file_path| {
-                if decrypt_failed.load(Ordering::Relaxed) {
-                    return None;
+        let process_file = |file_path: PathBuf| -> Option<(String, NoteMetaSummary)> {
+            if decrypt_failed.load(Ordering::Relaxed) {
+                return None;
+            }
+
+            let category_name = match file_path
+                .parent()
+                .and_then(|p| p.strip_prefix(&current_vault_path).ok())
+            {
+                Some(rel) if !rel.as_os_str().is_empty() => {
+                    let rel_clean = rel.to_string_lossy().replace('\\', "/");
+                    rel_clean.split('/').next().unwrap_or("General").to_string()
                 }
+                _ => "General".to_string(),
+            };
 
-                // Determine category from relative subdirectory path (root level folder only)
-                let category_name = match file_path
-                    .parent()
-                    .and_then(|p| p.strip_prefix(&*vault_dir).ok())
-                {
-                    Some(rel) if !rel.as_os_str().is_empty() => {
-                        let rel_clean = rel.to_string_lossy().replace('\\', "/");
-                        rel_clean.split('/').next().unwrap_or("General").to_string()
-                    }
-                    _ => "General".to_string(),
-                };
+            let item = match load_note_decrypted(&password, &file_path) {
+                Ok(mut note) => {
+                    let note_id = note.id.to_string();
+                    let title = if note.title.is_empty() {
+                        file_path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("Untitled")
+                            .to_string()
+                    } else {
+                        note.title.clone()
+                    };
+                    let tags = note.tags.clone();
+                    let date = format_unix_timestamp(note.updated_at);
+                    let updated_at = note.updated_at;
 
-                let item = match load_note_decrypted(&password, &file_path) {
-                    Ok(mut note) => {
-                        let note_id = note.id.to_string();
-                        let title = if note.title.is_empty() {
-                            file_path
-                                .file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("Untitled")
-                                .to_string()
-                        } else {
-                            note.title.clone()
-                        };
-                        let tags = note.tags.clone();
-                        let date = format_unix_timestamp(note.updated_at);
-                        let updated_at = note.updated_at;
+                    let summary = NoteMetaSummary {
+                        title,
+                        category: category_name,
+                        tags,
+                        date,
+                        updated_at,
+                        file_path: file_path.clone(),
+                    };
 
-                        let summary = NoteMetaSummary {
-                            title,
-                            category: category_name,
-                            tags,
-                            date,
-                            updated_at,
-                            file_path: file_path.clone(),
-                        };
+                    note.zeroize();
+                    Some((note_id, summary))
+                }
+                Err(_) => {
+                    decrypt_failed.store(true, Ordering::Relaxed);
+                    None
+                }
+            };
 
-                        note.zeroize();
-                        Some((note_id, summary))
-                    }
-                    Err(_) => {
-                        decrypt_failed.store(true, Ordering::Relaxed);
-                        None
-                    }
-                };
+            let done = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+            let progress = (done as f32) / (total_files as f32);
+            let status_msg = format!("Decrypting note {} of {}...", done, total_files);
+            let weak_ui = weak.clone();
 
-                let done = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
-                let progress = (done as f32) / (total_files as f32);
-                let status_msg = format!("Decrypting note {} of {}...", done, total_files);
-                let weak_ui = weak.clone();
-
-                slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = weak_ui.upgrade() {
-                        ui.set_loading_progress(progress);
-                        ui.set_loading_status_text(status_msg.into());
-                    }
-                })
-                .ok();
-
-                item
+            slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak_ui.upgrade() {
+                    ui.set_loading_progress(progress);
+                    ui.set_loading_status_text(status_msg.into());
+                }
             })
-            .collect();
+            .ok();
+
+            item
+        };
+
+        let multithreaded = use_multi.load(Ordering::Relaxed);
+        let decrypted_items: Vec<(String, NoteMetaSummary)> = if multithreaded {
+            vault_files.into_par_iter().filter_map(process_file).collect()
+        } else {
+            vault_files.into_iter().filter_map(process_file).collect()
+        };
 
         if decrypt_failed.load(Ordering::Relaxed) {
             if is_initial_unlock {
@@ -424,19 +432,16 @@ fn trigger_vault_reload(
             return;
         }
 
-        // Update persistent metadata store by completely replacing with reloaded notes
         {
             let mut store = meta_store.lock().unwrap();
             store.clear();
             store.extend(decrypted_items);
         }
 
-        // Store verified master password in the active vault session
         *session_pass.lock().unwrap() = Some(password);
 
-        // Dispatch UI model population to main event loop thread
         let weak_ui = weak.clone();
-        let v_path = Arc::clone(&vault_dir);
+        let v_path = current_vault_path;
         let m_store = Arc::clone(&meta_store);
         let af = Arc::clone(&a_folder);
         let sq = Arc::clone(&s_query);
@@ -455,47 +460,357 @@ fn trigger_vault_reload(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command line arguments with clap
     let args = Args::parse();
+    let config = AppConfig::load();
 
-    // Verify vault path existence and canonicalize
-    let vault_path = match std::fs::canonicalize(&args.vault_path) {
-        Ok(p) => p,
-        Err(_) => args.vault_path,
+    // Determine vault path (CLI overrides config temporarily)
+    let _is_cli_override = args.vault_path.is_some();
+    let initial_vault_path_str = if let Some(ref cli_p) = args.vault_path {
+        cli_p.to_string_lossy().to_string()
+    } else {
+        config.vault_path.clone()
     };
 
-    if !vault_path.exists() {
-        eprintln!("Error: Specified vault path does not exist: {:?}", vault_path);
-        std::process::exit(1);
-    }
-    if !vault_path.is_dir() {
-        eprintln!("Error: Specified vault path is not a directory: {:?}", vault_path);
-        std::process::exit(1);
-    }
+    let initial_vault_path = PathBuf::from(&initial_vault_path_str);
 
-    let vault_path = Arc::new(vault_path);
+    // Shared state
+    let app_config = Arc::new(Mutex::new(config.clone()));
+    let vault_path = Arc::new(Mutex::new(initial_vault_path.clone()));
+    let use_multithreading = Arc::new(AtomicBool::new(config.use_multithreading));
+    let session_password: Arc<Mutex<Option<Zeroizing<String>>>> = Arc::new(Mutex::new(None));
+    let metadata_store: Arc<Mutex<HashMap<String, NoteMetaSummary>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("General".to_string()));
+    let search_query: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
-    // Instantiate Slint MainWindow
+    // Slint Window
     let main_window = MainWindow::new()?;
     let window_weak = main_window.as_weak();
 
-    // Thread-safe vault session state holding the master password while unlocked
-    let session_password: Arc<Mutex<Option<Zeroizing<String>>>> = Arc::new(Mutex::new(None));
+    // Initialize Theme
+    let theme_mode = if config.theme == "light" { "light" } else { "dark" };
+    main_window.global::<Theme>().set_mode(theme_mode.into());
+    main_window.set_settings_theme(theme_mode.into());
 
-    // In-memory store for note metadata (indexed by note UUID string)
-    let metadata_store: Arc<Mutex<HashMap<String, NoteMetaSummary>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let theme_options_model: slint::ModelRc<slint::SharedString> =
+        std::rc::Rc::new(slint::VecModel::from(vec!["dark".into(), "light".into()])).into();
+    main_window.set_theme_options(theme_options_model);
 
-    // Active folder tracker (defaults to "General")
-    let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("General".to_string()));
+    // Initialize Settings state
+    main_window.set_settings_vault_path(initial_vault_path_str.as_str().into());
+    main_window.set_settings_use_multithreading(config.use_multithreading);
 
-    // Active search query tracker
-    let search_query: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    // Startup flow: Check if vault path is empty or does not exist
+    let needs_onboarding = initial_vault_path_str.trim().is_empty();
 
-    // Set initial vault status indicator
-    main_window.set_vault_status_text("Vault locked".into());
+    if needs_onboarding {
+        main_window.set_show_welcome_modal(true);
+        main_window.set_welcome_vault_path("".into());
+        main_window.set_is_locked(false);
+        main_window.set_vault_status_text("No vault folder selected".into());
+    } else {
+        // Ensure directory exists if path is provided
+        if !initial_vault_path.exists() {
+            let _ = std::fs::create_dir_all(&initial_vault_path);
+        }
+        main_window.set_show_welcome_modal(false);
+        main_window.set_is_locked(true);
+        main_window.set_vault_status_text("Vault locked".into());
+    }
+
     main_window.set_active_folder("General".into());
     main_window.set_note_category("General".into());
+
+    // -------------------------------------------------------------
+    // Callback: Browse Vault Path Requested (rfd Native Folder Picker)
+    // -------------------------------------------------------------
+    main_window.on_browse_vault_path_requested({
+        let window_weak = window_weak.clone();
+
+        move || {
+            let weak = window_weak.clone();
+            thread::spawn(move || {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    let path_str = folder.to_string_lossy().to_string();
+                    slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak.upgrade() {
+                            ui.set_settings_vault_path(path_str.as_str().into());
+                            ui.set_welcome_vault_path(path_str.into());
+                            ui.set_welcome_error_message("".into());
+                        }
+                    })
+                    .ok();
+                }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Welcome Open Vault Requested
+    // -------------------------------------------------------------
+    main_window.on_welcome_open_vault_requested({
+        let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
+        let app_config = Arc::clone(&app_config);
+
+        move |chosen_path_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let chosen_path_clean = chosen_path_str.trim().to_string();
+
+            if chosen_path_clean.is_empty() {
+                ui.set_welcome_error_message("Please select a valid vault directory.".into());
+                return;
+            }
+
+            let path = PathBuf::from(&chosen_path_clean);
+            if let Err(e) = std::fs::create_dir_all(&path) {
+                ui.set_welcome_error_message(format!("Failed to create folder: {}", e).into());
+                return;
+            }
+
+            // Save to config
+            {
+                let mut cfg = app_config.lock().unwrap();
+                cfg.vault_path = chosen_path_clean.clone();
+                let _ = cfg.save();
+            }
+
+            *vault_path.lock().unwrap() = path;
+            ui.set_settings_vault_path(chosen_path_clean.as_str().into());
+            ui.set_show_welcome_modal(false);
+            ui.set_is_locked(true);
+            ui.set_vault_status_text("Vault locked".into());
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Open Settings Requested
+    // -------------------------------------------------------------
+    main_window.on_open_settings_requested({
+        let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
+        let use_multithreading = Arc::clone(&use_multithreading);
+        let app_config = Arc::clone(&app_config);
+
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let cur_path = vault_path.lock().unwrap().to_string_lossy().to_string();
+            let cur_multi = use_multithreading.load(Ordering::Relaxed);
+            let cur_theme = app_config.lock().unwrap().theme.clone();
+
+            ui.set_settings_vault_path(cur_path.into());
+            ui.set_settings_use_multithreading(cur_multi);
+            ui.set_settings_theme(cur_theme.into());
+            ui.set_settings_cur_pwd("".into());
+            ui.set_settings_new_pwd("".into());
+            ui.set_settings_confirm_pwd("".into());
+            ui.set_password_change_status("".into());
+            ui.set_password_change_success(false);
+            ui.set_is_reencrypting(false);
+            ui.set_show_settings_modal(true);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Save Settings Requested
+    // -------------------------------------------------------------
+    main_window.on_save_settings_requested({
+        let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
+        let use_multithreading = Arc::clone(&use_multithreading);
+        let app_config = Arc::clone(&app_config);
+        let session_password = Arc::clone(&session_password);
+        let metadata_store = Arc::clone(&metadata_store);
+        let active_folder = Arc::clone(&active_folder);
+        let search_query = Arc::clone(&search_query);
+
+        move |new_path_str, new_multi, new_theme_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let new_path_clean = new_path_str.trim().to_string();
+            let new_theme_clean = new_theme_str.trim().to_string();
+
+            // 1. Update and save config.json
+            {
+                let mut cfg = app_config.lock().unwrap();
+                cfg.vault_path = new_path_clean.clone();
+                cfg.use_multithreading = new_multi;
+                cfg.theme = new_theme_clean.clone();
+                if let Err(e) = cfg.save() {
+                    eprintln!("Failed to save config.json: {}", e);
+                }
+            }
+
+            // 2. Apply theme dynamically
+            ui.global::<Theme>().set_mode(new_theme_clean.as_str().into());
+
+            // 3. Update multithreading state
+            use_multithreading.store(new_multi, Ordering::Relaxed);
+
+            // 4. Handle vault path changes
+            let old_path = vault_path.lock().unwrap().clone();
+            let new_path = PathBuf::from(&new_path_clean);
+
+            if !new_path_clean.is_empty() && new_path != old_path {
+                let _ = std::fs::create_dir_all(&new_path);
+                *vault_path.lock().unwrap() = new_path.clone();
+
+                // Lock vault on folder switch
+                *session_password.lock().unwrap() = None;
+                metadata_store.lock().unwrap().clear();
+                *active_folder.lock().unwrap() = "General".to_string();
+                *search_query.lock().unwrap() = String::new();
+
+                ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_current_notes(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_active_note_id("".into());
+                ui.set_note_title("".into());
+                ui.set_active_folder("General".into());
+                ui.set_note_category("General".into());
+                ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_note_date("".into());
+                ui.set_note_content("".into());
+                ui.set_search_query("".into());
+                ui.set_unlock_password("".into());
+                ui.set_vault_status_text("Vault locked (switched folder)".into());
+                ui.set_has_unsaved_changes(false);
+                ui.set_show_unsaved_warning(false);
+                ui.set_is_locked(true);
+            }
+
+            ui.set_show_settings_modal(false);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Exit Requested
+    // -------------------------------------------------------------
+    main_window.on_exit_requested({
+        let window_weak = window_weak.clone();
+        move || {
+            if let Some(ui) = window_weak.upgrade() {
+                let _ = ui.hide();
+            }
+            std::process::exit(0);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Change Master Password (SECURE & ATOMIC)
+    // -------------------------------------------------------------
+    main_window.on_change_password_requested({
+        let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
+        let session_password = Arc::clone(&session_password);
+
+        move |raw_current, raw_new, raw_confirm| {
+            let Some(ui) = window_weak.upgrade() else { return };
+
+            let current_pwd = Zeroizing::new(raw_current.to_string());
+            let new_pwd = Zeroizing::new(raw_new.to_string());
+            let confirm_pwd = Zeroizing::new(raw_confirm.to_string());
+
+            // 1. Verify active session is unlocked
+            let session_opt = session_password.lock().unwrap().clone();
+            let active_pwd = match session_opt {
+                Some(p) => p,
+                None => {
+                    ui.set_password_change_status(
+                        "Error: Vault must be unlocked to change password.".into(),
+                    );
+                    ui.set_password_change_success(false);
+                    return;
+                }
+            };
+
+            // 2. Verify current password matches active session
+            if current_pwd.as_str() != active_pwd.as_str() {
+                ui.set_password_change_status("Error: Current password does not match.".into());
+                ui.set_password_change_success(false);
+                return;
+            }
+
+            // 3. Verify new passwords match and are non-empty
+            if new_pwd.as_str() != confirm_pwd.as_str() {
+                ui.set_password_change_status(
+                    "Error: New password and confirmation do not match.".into(),
+                );
+                ui.set_password_change_success(false);
+                return;
+            }
+
+            if new_pwd.is_empty() {
+                ui.set_password_change_status("Error: New password cannot be empty.".into());
+                ui.set_password_change_success(false);
+                return;
+            }
+
+            // Begin atomic re-encryption in background thread
+            ui.set_is_reencrypting(true);
+            ui.set_reencrypt_progress(0.0);
+            ui.set_password_change_status("Starting atomic re-encryption...".into());
+            ui.set_password_change_success(false);
+
+            let weak = window_weak.clone();
+            let v_dir = vault_path.lock().unwrap().clone();
+            let s_pass = Arc::clone(&session_password);
+
+            thread::spawn(move || {
+                let weak_progress = weak.clone();
+                let res = note_vault::reencrypt_vault_atomic(
+                    &v_dir,
+                    &current_pwd,
+                    &new_pwd,
+                    move |done, total| {
+                        let progress = (done as f32) / (total as f32);
+                        let status_msg = format!("Re-encrypting note {} of {}...", done, total);
+                        let weak_ui = weak_progress.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_ui.upgrade() {
+                                ui.set_reencrypt_progress(progress);
+                                ui.set_password_change_status(status_msg.into());
+                            }
+                        })
+                        .ok();
+                    },
+                );
+
+                match res {
+                    Ok(total) => {
+                        *s_pass.lock().unwrap() = Some(new_pwd);
+                        let weak_ui = weak.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_ui.upgrade() {
+                                ui.set_is_reencrypting(false);
+                                ui.set_reencrypt_progress(1.0);
+                                ui.set_password_change_status(
+                                    format!("Master password changed successfully ({} notes updated).", total).into(),
+                                );
+                                ui.set_password_change_success(true);
+                                ui.set_settings_cur_pwd("".into());
+                                ui.set_settings_new_pwd("".into());
+                                ui.set_settings_confirm_pwd("".into());
+                            }
+                        })
+                        .ok();
+                    }
+                    Err(err) => {
+                        let err_msg = err.to_string();
+                        let weak_ui = weak.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_ui.upgrade() {
+                                ui.set_is_reencrypting(false);
+                                ui.set_password_change_status(
+                                    format!("Re-encryption aborted: {}", err_msg).into(),
+                                );
+                                ui.set_password_change_success(false);
+                            }
+                        })
+                        .ok();
+                    }
+                }
+            });
+        }
+    });
 
     // -------------------------------------------------------------
     // Callback: Folder Selected in Pane 1
@@ -509,6 +824,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         move |folder| {
             let Some(ui) = window_weak.upgrade() else { return };
+            let v_path = vault_path.lock().unwrap().clone();
             *active_folder.lock().unwrap() = folder.to_string();
             ui.set_active_folder(folder.clone());
             ui.set_note_category(folder);
@@ -517,7 +833,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_content("".into());
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("".into());
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &v_path, &metadata_store, &active_folder, &search_query);
         }
     });
 
@@ -533,8 +849,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         move |query| {
             let Some(ui) = window_weak.upgrade() else { return };
+            let v_path = vault_path.lock().unwrap().clone();
             *search_query.lock().unwrap() = query.to_string();
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &v_path, &metadata_store, &active_folder, &search_query);
         }
     });
 
@@ -548,11 +865,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let session_password = Arc::clone(&session_password);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
+        let use_multithreading = Arc::clone(&use_multithreading);
 
         move |raw_password| {
             let Some(ui) = window_weak.upgrade() else { return };
 
-            // Wrap password immediately in Zeroizing for memory safety
             let password = Zeroizing::new(raw_password.to_string());
 
             if password.is_empty() {
@@ -560,7 +877,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
-            // Clear password field in UI to avoid plaintext lingering in memory
             ui.set_unlock_password("".into());
             ui.set_unlock_error_message("".into());
 
@@ -572,13 +888,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&session_password),
                 Arc::clone(&active_folder),
                 Arc::clone(&search_query),
+                Arc::clone(&use_multithreading),
                 true,
             );
         }
     });
 
     // -------------------------------------------------------------
-    // Callback: Note Selection in Pane 2 (On-Demand Loading with Unsaved Changes Guard)
+    // Callback: Note Selection in Pane 2
     // -------------------------------------------------------------
     main_window.on_select_note_requested({
         let window_weak = window_weak.clone();
@@ -608,6 +925,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let session_password = Arc::clone(&session_password);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
+        let use_multithreading = Arc::clone(&use_multithreading);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -629,6 +947,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 "select_folder" => {
+                    let v_path = vault_path.lock().unwrap().clone();
                     *active_folder.lock().unwrap() = payload.clone();
                     ui.set_active_folder(payload.clone().into());
                     ui.set_note_category(payload.into());
@@ -637,7 +956,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui.set_note_content("".into());
                     ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                     ui.set_note_date("".into());
-                    refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+                    refresh_models(&ui, &v_path, &metadata_store, &active_folder, &search_query);
                 }
                 "new_note" => {
                     let cur_folder = active_folder.lock().unwrap().clone();
@@ -664,6 +983,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arc::clone(&session_password),
                             Arc::clone(&active_folder),
                             Arc::clone(&search_query),
+                            Arc::clone(&use_multithreading),
                             false,
                         );
                     }
@@ -674,7 +994,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -------------------------------------------------------------
-    // Callback: Rescan Vault Requested (Resync UI with disk)
+    // Callback: Rescan Vault Requested
     // -------------------------------------------------------------
     main_window.on_rescan_vault_requested({
         let window_weak = window_weak.clone();
@@ -683,6 +1003,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let session_password = Arc::clone(&session_password);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
+        let use_multithreading = Arc::clone(&use_multithreading);
 
         move || {
             let password_opt = session_password.lock().unwrap().clone();
@@ -695,6 +1016,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arc::clone(&session_password),
                     Arc::clone(&active_folder),
                     Arc::clone(&search_query),
+                    Arc::clone(&use_multithreading),
                     false,
                 );
             }
@@ -739,7 +1061,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -------------------------------------------------------------
-    // Callback: Save Note (Encrypted Persistence with Category)
+    // Callback: Save Note
     // -------------------------------------------------------------
     main_window.on_save_note_requested({
         let window_weak = window_weak.clone();
@@ -751,6 +1073,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         move |title, content, category| {
             let Some(ui) = window_weak.upgrade() else { return };
+
+            let current_vault = vault_path.lock().unwrap().clone();
 
             let password = {
                 let session = session_password.lock().unwrap();
@@ -787,9 +1111,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .as_secs() as i64;
 
             let category_dir = if target_category == "General" {
-                vault_path.join("General")
+                current_vault.join("General")
             } else {
-                vault_path.join(&target_category)
+                current_vault.join(&target_category)
             };
             let _ = std::fs::create_dir_all(&category_dir);
 
@@ -809,7 +1133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (m.file_path.clone(), m.category.clone())
                     } else {
                         (
-                            vault_path.join(&target_category).join(format!("{}.vault", active_id)),
+                            current_vault.join(&target_category).join(format!("{}.vault", active_id)),
                             target_category.clone(),
                         )
                     }
@@ -893,7 +1217,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_active_folder(target_category.into());
             ui.set_has_unsaved_changes(false);
 
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Note saved successfully to {:?}", target_path);
         }
     });
@@ -919,7 +1243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -------------------------------------------------------------
-    // Callback: New Folder Requested (Open Modal)
+    // Callback: New Folder Requested
     // -------------------------------------------------------------
     main_window.on_new_folder_requested({
         let window_weak = window_weak.clone();
@@ -932,7 +1256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -------------------------------------------------------------
-    // Callback: Confirm Folder Creation (Root Level Only)
+    // Callback: Confirm Folder Creation
     // -------------------------------------------------------------
     main_window.on_create_folder_confirmed({
         let window_weak = window_weak.clone();
@@ -949,8 +1273,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
-            // All folders are strictly on the root level
-            let target_dir = vault_path.join(name_clean);
+            let current_vault = vault_path.lock().unwrap().clone();
+            let target_dir = current_vault.join(name_clean);
             let full_folder_name = name_clean.to_string();
 
             if let Err(e) = std::fs::create_dir_all(&target_dir) {
@@ -963,7 +1287,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_active_folder(full_folder_name.clone().into());
             ui.set_note_category(full_folder_name.into());
 
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
         }
     });
 
@@ -986,8 +1310,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
-            let old_path = vault_path.join(&old_name);
-            let new_path = vault_path.join(&new_name);
+            let current_vault = vault_path.lock().unwrap().clone();
+            let old_path = current_vault.join(&old_name);
+            let new_path = current_vault.join(&new_name);
 
             if old_path.exists() {
                 if let Some(parent) = new_path.parent() {
@@ -1039,13 +1364,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_active_folder(new_name.as_str().into());
             }
 
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Renamed folder from '{}' to '{}'", old_name, new_name);
         }
     });
 
     // -------------------------------------------------------------
-    // Callback: Confirm Folder Deletion (Recursive)
+    // Callback: Confirm Folder Deletion
     // -------------------------------------------------------------
     main_window.on_delete_folder_confirmed({
         let window_weak = window_weak.clone();
@@ -1062,7 +1387,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
-            let target_dir = vault_path.join(&folder_name);
+            let current_vault = vault_path.lock().unwrap().clone();
+            let target_dir = current_vault.join(&folder_name);
             if target_dir.exists() {
                 if let Err(e) = std::fs::remove_dir_all(&target_dir) {
                     eprintln!("Failed to recursively delete folder {:?}: {}", target_dir, e);
@@ -1090,9 +1416,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if is_active {
-                // Find remaining folders
                 let mut remaining = std::collections::BTreeSet::new();
-                for entry in WalkDir::new(&*vault_path)
+                for entry in WalkDir::new(&current_vault)
                     .min_depth(1)
                     .max_depth(1)
                     .follow_links(false)
@@ -1100,7 +1425,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter_map(|e| e.ok())
                 {
                     let p = entry.path();
-                    if p.is_dir() && p != &*vault_path {
+                    if p.is_dir() && p != current_vault {
                         if let Some(file_name) = p.file_name() {
                             let name = file_name.to_string_lossy();
                             if !name.is_empty() && !name.starts_with('.') && name != folder_name {
@@ -1132,7 +1457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_note_date("".into());
             }
 
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Deleted folder '{}' and its encrypted notes", folder_name);
         }
     });
@@ -1156,10 +1481,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
+            let current_vault = vault_path.lock().unwrap().clone();
             let target_dir = if target_folder == "General" {
-                vault_path.join("General")
+                current_vault.join("General")
             } else {
-                vault_path.join(&target_folder)
+                current_vault.join(&target_folder)
             };
             if let Err(e) = std::fs::create_dir_all(&target_dir) {
                 eprintln!("Failed to create folder {:?}: {}", target_dir, e);
@@ -1168,7 +1494,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let new_path = target_dir.join(format!("{}.vault", note_id));
 
-            // Move the file and update metadata_store
             {
                 let mut store = metadata_store.lock().unwrap();
                 if let Some(meta) = store.get_mut(&note_id) {
@@ -1195,7 +1520,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_note_category(target_folder.as_str().into());
             }
 
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Moved note {} to folder '{}'", note_id, target_folder);
         }
     });
@@ -1218,6 +1543,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
+            let current_vault = vault_path.lock().unwrap().clone();
+
             let removed_meta = {
                 let mut store = metadata_store.lock().unwrap();
                 store.remove(&note_id)
@@ -1239,7 +1566,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_note_date("".into());
             }
 
-            refresh_models(&ui, &vault_path, &metadata_store, &active_folder, &search_query);
+            refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Deleted note {}", note_id);
         }
     });
@@ -1292,7 +1619,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Run GUI event loop
+    // Run Slint GUI event loop
     main_window.run()?;
     Ok(())
 }
