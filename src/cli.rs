@@ -31,10 +31,6 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         output: PathBuf,
 
-        /// Optional description for the note
-        #[arg(short, long)]
-        description: Option<String>,
-
         /// Optional tags for the note (can be specified multiple times or comma-separated)
         #[arg(short, long, value_delimiter = ',', num_args = 1..)]
         tags: Vec<String>,
@@ -72,7 +68,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Commands::Encrypt {
             input,
             output,
-            description,
             tags,
         } => {
             // 1. Verify input file exists
@@ -94,7 +89,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("Untitled Note");
 
-            let note = Note::new(title, description, tags, content);
+            let note = Note::new(title, tags, content);
 
             // 5. Securely prompt for password without terminal echo and wrap in Zeroizing
             let password_str = rpassword::prompt_password("Enter password to encrypt note: ")
@@ -185,10 +180,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             println!("=== Vault Note Metadata ===");
             println!("ID:          {}", note.id);
             println!("Title:       {}", note.title);
-            println!(
-                "Description: {}",
-                note.description.as_deref().unwrap_or("<None>")
-            );
             println!(
                 "Tags:        {}",
                 if note.tags.is_empty() {

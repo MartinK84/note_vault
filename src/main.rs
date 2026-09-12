@@ -246,7 +246,7 @@ fn load_note_into_ui(
         if let Some(password) = password_opt {
             match load_note_decrypted(&password, &meta.file_path) {
                 Ok(mut note) => {
-                    ui.set_note_content(note.content.clone().into());
+                    ui.set_note_content(note.content.as_str().into());
                     note.zeroize();
                 }
                 Err(e) => {
@@ -786,17 +786,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_default()
                 .as_secs() as i64;
 
-            let (mut note, target_path, old_path_to_remove) = if is_new {
-                let category_dir = if target_category == "General" {
-                    vault_path.join("General")
-                } else {
-                    vault_path.join(&target_category)
-                };
-                let _ = std::fs::create_dir_all(&category_dir);
+            let category_dir = if target_category == "General" {
+                vault_path.join("General")
+            } else {
+                vault_path.join(&target_category)
+            };
+            let _ = std::fs::create_dir_all(&category_dir);
 
+            let (mut note, target_path, old_path_to_remove) = if is_new {
                 let new_note = Note::new(
                     title.to_string(),
-                    None,
                     parsed_tags.clone(),
                     content.to_string(),
                 );
@@ -816,13 +815,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 };
 
-                let category_dir = if target_category == "General" {
-                    vault_path.join("General")
-                } else {
-                    vault_path.join(&target_category)
-                };
-                let _ = std::fs::create_dir_all(&category_dir);
-
                 let new_target_path = category_dir.join(format!("{}.vault", active_id));
                 let remove_old = if existing_file_path != new_target_path && existing_file_path.exists() {
                     Some(existing_file_path.clone())
@@ -830,40 +822,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
 
-                let note_to_save = if existing_file_path.exists() {
-                    match load_note_decrypted(&password, &existing_file_path) {
-                        Ok(mut existing) => {
-                            existing.title = title.to_string();
-                            existing.tags = parsed_tags.clone();
-                            existing.content = content.to_string();
-                            existing.updated_at = now;
-                            existing
-                        }
-                        Err(_) => {
-                            let parsed_uuid =
-                                Uuid::parse_str(&active_id).unwrap_or_else(|_| Uuid::new_v4());
-                            Note {
-                                id: parsed_uuid,
-                                title: title.to_string(),
-                                description: None,
-                                tags: parsed_tags.clone(),
-                                content: content.to_string(),
-                                created_at: now,
-                                updated_at: now,
-                            }
-                        }
-                    }
+                let loaded_note = if existing_file_path.exists() {
+                    load_note_decrypted(&password, &existing_file_path).ok()
                 } else {
-                    let parsed_uuid =
-                        Uuid::parse_str(&active_id).unwrap_or_else(|_| Uuid::new_v4());
-                    Note {
-                        id: parsed_uuid,
-                        title: title.to_string(),
-                        description: None,
-                        tags: parsed_tags.clone(),
-                        content: content.to_string(),
-                        created_at: now,
-                        updated_at: now,
+                    None
+                };
+
+                let note_to_save = match loaded_note {
+                    Some(mut existing) => {
+                        existing.title = title.to_string();
+                        existing.tags = parsed_tags.clone();
+                        existing.content = content.to_string();
+                        existing.updated_at = now;
+                        existing
+                    }
+                    None => {
+                        let parsed_uuid =
+                            Uuid::parse_str(&active_id).unwrap_or_else(|_| Uuid::new_v4());
+                        Note {
+                            id: parsed_uuid,
+                            title: title.to_string(),
+                            tags: parsed_tags.clone(),
+                            content: content.to_string(),
+                            created_at: now,
+                            updated_at: now,
+                        }
                     }
                 };
 
