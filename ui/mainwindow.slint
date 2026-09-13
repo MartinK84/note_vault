@@ -247,8 +247,14 @@ export component MainWindow inherits Window {
                                                 padding-right: 8px;
                                                 spacing: 8px;
                                                 alignment: start;
+                                                cross-axis-alignment: center;
 
-                                                Text { text: "⚙️"; font-size: 12px; vertical-alignment: center; }
+                                                Image {
+                                                    source: @image-url("../assets/icons/settings.svg");
+                                                    width: 14px;
+                                                    height: 14px;
+                                                    colorize: Theme.text_primary;
+                                                }
                                                 Text { text: "Settings"; font-size: 12px; color: Theme.text_primary; vertical-alignment: center; }
                                             }
                                         }
@@ -271,8 +277,8 @@ export component MainWindow inherits Window {
                                                 padding-right: 8px;
                                                 spacing: 8px;
                                                 alignment: start;
+                                                cross-axis-alignment: center;
 
-                                                Text { text: "❌"; font-size: 12px; vertical-alignment: center; }
                                                 Text { text: "Exit"; font-size: 12px; color: Theme.danger; vertical-alignment: center; }
                                             }
                                         }
@@ -321,45 +327,87 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             spacing: 4px;
 
-                            Button {
+                            Rectangle {
                                 height: 26px;
-                                width: 30px;
-                                text: "🔄";
-                                clicked => {
-                                    if root.has_unsaved_changes {
-                                        root.pending_action_type = "rescan_vault";
-                                        root.pending_action_payload = "";
-                                        root.show_unsaved_warning = true;
-                                    } else {
-                                        root.rescan_vault_requested();
+                                width: 28px;
+                                border-radius: 4px;
+                                background: refresh_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                                refresh_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        if root.has_unsaved_changes {
+                                            root.pending_action_type = "rescan_vault";
+                                            root.pending_action_payload = "";
+                                            root.show_unsaved_warning = true;
+                                        } else {
+                                            root.rescan_vault_requested();
+                                        }
                                     }
+                                }
+
+                                Image {
+                                    source: @image-url("../assets/icons/refresh.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.text_primary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
                                 }
                             }
 
-                            Button {
+                            Rectangle {
                                 height: 26px;
-                                width: 30px;
-                                text: "+";
-                                clicked => {
-                                    if root.has_unsaved_changes {
-                                        root.pending_action_type = "new_folder";
-                                        root.pending_action_payload = "";
-                                        root.show_unsaved_warning = true;
-                                    } else {
-                                        root.new_folder_name = "";
-                                        root.show_folder_modal = true;
-                                        root.new_folder_requested();
+                                width: 28px;
+                                border-radius: 4px;
+                                background: add_folder_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                                add_folder_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        if root.has_unsaved_changes {
+                                            root.pending_action_type = "new_folder";
+                                            root.pending_action_payload = "";
+                                            root.show_unsaved_warning = true;
+                                        } else {
+                                            root.new_folder_name = "";
+                                            root.show_folder_modal = true;
+                                            root.new_folder_requested();
+                                        }
                                     }
+                                }
+
+                                Image {
+                                    source: @image-url("../assets/icons/plus.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.text_primary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
                                 }
                             }
 
-                            Button {
+                            Rectangle {
                                 height: 26px;
-                                width: 30px;
-                                text: "🔒";
-                                clicked => {
-                                    root.is_locked = true;
-                                    root.lock_vault();
+                                width: 28px;
+                                border-radius: 4px;
+                                background: lock_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                                lock_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.is_locked = true;
+                                        root.lock_vault();
+                                    }
+                                }
+
+                                Image {
+                                    source: @image-url("../assets/icons/lock.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.text_primary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
                                 }
                             }
                         }
@@ -417,11 +465,13 @@ export component MainWindow inherits Window {
                                                 padding-right: 10px;
                                                 spacing: 8px;
                                                 alignment: start;
+                                                cross-axis-alignment: center;
 
-                                                Text {
-                                                    text: "✏️";
-                                                    font-size: 12px;
-                                                    vertical-alignment: center;
+                                                Image {
+                                                    source: @image-url("../assets/icons/edit.svg");
+                                                    width: 14px;
+                                                    height: 14px;
+                                                    colorize: Theme.text_primary;
                                                 }
                                                 Text {
                                                     text: "Rename Folder";
@@ -451,11 +501,13 @@ export component MainWindow inherits Window {
                                                 padding-right: 10px;
                                                 spacing: 8px;
                                                 alignment: start;
+                                                cross-axis-alignment: center;
 
-                                                Text {
-                                                    text: "🗑️";
-                                                    font-size: 12px;
-                                                    vertical-alignment: center;
+                                                Image {
+                                                    source: @image-url("../assets/icons/trash.svg");
+                                                    width: 14px;
+                                                    height: 14px;
+                                                    colorize: Theme.danger;
                                                 }
                                                 Text {
                                                     text: "Delete Folder";
@@ -495,11 +547,13 @@ export component MainWindow inherits Window {
                                 padding-right: 10px;
                                 spacing: 8px;
                                 alignment: start;
+                                cross-axis-alignment: center;
 
-                                Text {
-                                    text: "📁";
-                                    font-size: 13px;
-                                    vertical-alignment: center;
+                                Image {
+                                    source: @image-url("../assets/icons/folder.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.active_folder == folder ? Theme.accent : Theme.text_secondary;
                                 }
 
                                 Text {
@@ -565,11 +619,13 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            Text {
-                                text: "⚙️";
-                                font-size: 11px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                            Image {
+                                source: @image-url("../assets/icons/settings.svg");
+                                width: 13px;
+                                height: 13px;
+                                colorize: Theme.text_secondary;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
                             }
                         }
                     }
@@ -622,25 +678,39 @@ export component MainWindow inherits Window {
                             height: 28px;
                             font-size: 13px;
                             text <=> root.search_query;
-                            placeholder-text: "🔍 Search notes...";
+                            placeholder-text: "Search notes...";
                             horizontal-stretch: 1;
                             edited(val) => {
                                 root.search_changed(val);
                             }
                         }
 
-                        Button {
+                        Rectangle {
                             height: 28px;
-                            width: 34px;
-                            text: "+";
-                            clicked => {
-                                if root.has_unsaved_changes {
-                                    root.pending_action_type = "new_note";
-                                    root.pending_action_payload = "";
-                                    root.show_unsaved_warning = true;
-                                } else {
-                                    root.new_note_requested();
+                            width: 32px;
+                            border-radius: 4px;
+                            background: new_note_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                            new_note_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if root.has_unsaved_changes {
+                                        root.pending_action_type = "new_note";
+                                        root.pending_action_payload = "";
+                                        root.show_unsaved_warning = true;
+                                    } else {
+                                        root.new_note_requested();
+                                    }
                                 }
+                            }
+
+                            Image {
+                                source: @image-url("../assets/icons/plus.svg");
+                                width: 14px;
+                                height: 14px;
+                                colorize: Theme.text_primary;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
                             }
                         }
                     }
@@ -700,11 +770,13 @@ export component MainWindow inherits Window {
                                                 padding-right: 10px;
                                                 spacing: 8px;
                                                 alignment: start;
+                                                cross-axis-alignment: center;
 
-                                                Text {
-                                                    text: "📁";
-                                                    font-size: 12px;
-                                                    vertical-alignment: center;
+                                                Image {
+                                                    source: @image-url("../assets/icons/folder.svg");
+                                                    width: 14px;
+                                                    height: 14px;
+                                                    colorize: Theme.text_primary;
                                                 }
                                                 Text {
                                                     text: "Move Note";
@@ -735,11 +807,13 @@ export component MainWindow inherits Window {
                                                 padding-right: 10px;
                                                 spacing: 8px;
                                                 alignment: start;
+                                                cross-axis-alignment: center;
 
-                                                Text {
-                                                    text: "🗑️";
-                                                    font-size: 12px;
-                                                    vertical-alignment: center;
+                                                Image {
+                                                    source: @image-url("../assets/icons/trash.svg");
+                                                    width: 14px;
+                                                    height: 14px;
+                                                    colorize: Theme.danger;
                                                 }
                                                 Text {
                                                     text: "Delete Note";
@@ -792,9 +866,17 @@ export component MainWindow inherits Window {
                                 HorizontalLayout {
                                     alignment: start;
                                     spacing: 6px;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/tag.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.text_secondary;
+                                    }
 
                                     Text {
-                                        text: "🏷️ " + (note.tags != "" ? note.tags : "No tags");
+                                        text: note.tags != "" ? note.tags : "No tags";
                                         font-size: 11px;
                                         color: Theme.text_secondary;
                                         overflow: elide;
@@ -867,6 +949,7 @@ export component MainWindow inherits Window {
                             padding-right: 16px;
                             spacing: 10px;
                             vertical-stretch: 0;
+                            cross-axis-alignment: center;
 
                             LineEdit {
                                 height: 28px;
@@ -896,6 +979,7 @@ export component MainWindow inherits Window {
                                         padding-right: 6px;
                                         spacing: 4px;
                                         alignment: center;
+                                        cross-axis-alignment: center;
 
                                         Text {
                                             text: "#" + tag;
@@ -930,12 +1014,40 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                Button {
+                                Rectangle {
                                     height: 24px;
-                                    text: "+ Tag";
-                                    clicked => {
-                                        root.new_tag_name = "";
-                                        root.show_add_tag_modal = true;
+                                    border-radius: 4px;
+                                    background: add_tag_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                                    add_tag_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.new_tag_name = "";
+                                            root.show_add_tag_modal = true;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        spacing: 4px;
+                                        alignment: center;
+                                        cross-axis-alignment: center;
+
+                                        Image {
+                                            source: @image-url("../assets/icons/plus.svg");
+                                            width: 11px;
+                                            height: 11px;
+                                            colorize: Theme.text_primary;
+                                        }
+
+                                        Text {
+                                            text: "Tag";
+                                            font-size: 11px;
+                                            font-weight: 500;
+                                            color: Theme.text_primary;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                             }
@@ -946,13 +1058,15 @@ export component MainWindow inherits Window {
                             }
 
                             HorizontalLayout {
-                                spacing: 4px;
+                                spacing: 5px;
                                 alignment: center;
+                                cross-axis-alignment: center;
 
-                                Text {
-                                    text: "📅";
-                                    font-size: 11px;
-                                    vertical-alignment: center;
+                                Image {
+                                    source: @image-url("../assets/icons/calendar.svg");
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Theme.text_secondary;
                                 }
 
                                 Text {
@@ -983,13 +1097,21 @@ export component MainWindow inherits Window {
                                 }
 
                                 HorizontalLayout {
-                                    padding-left: 14px;
-                                    padding-right: 14px;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
                                     spacing: 6px;
                                     alignment: center;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/save.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: root.has_unsaved_changes ? Theme.danger_text : Theme.text_secondary;
+                                    }
 
                                     Text {
-                                        text: "💾 Save";
+                                        text: "Save";
                                         font-size: 13px;
                                         font-weight: 600;
                                         color: root.has_unsaved_changes ? Theme.danger_text : Theme.text_secondary;
@@ -1025,11 +1147,13 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         alignment: center;
                         spacing: 12px;
+                        cross-axis-alignment: center;
 
-                        Text {
-                            text: "📝";
-                            font-size: 42px;
-                            horizontal-alignment: center;
+                        Image {
+                            source: @image-url("../assets/icons/file.svg");
+                            width: 48px;
+                            height: 48px;
+                            colorize: Theme.text_muted;
                         }
 
                         Text {

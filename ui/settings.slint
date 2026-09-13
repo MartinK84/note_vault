@@ -53,13 +53,26 @@ export component SettingsDialog inherits Rectangle {
 
             // Dialog Header Bar
             HorizontalLayout {
-                Text {
-                    text: "⚙️ Settings";
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: Theme.text_primary;
-                    vertical-alignment: center;
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    cross-axis-alignment: center;
                     horizontal-stretch: 1;
+
+                    Image {
+                        source: @image-url("../assets/icons/settings.svg");
+                        width: 18px;
+                        height: 18px;
+                        colorize: Theme.text_primary;
+                    }
+
+                    Text {
+                        text: "Settings";
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Rectangle {
@@ -160,11 +173,25 @@ export component SettingsDialog inherits Rectangle {
                     padding: 14px;
                     spacing: 10px;
 
-                    Text {
-                        text: "🔐 Change Master Password";
-                        font-size: 13px;
-                        font-weight: 700;
-                        color: Theme.text_primary;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        cross-axis-alignment: center;
+
+                        Image {
+                            source: @image-url("../assets/icons/lock.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: Theme.text_primary;
+                        }
+
+                        Text {
+                            text: "Change Master Password";
+                            font-size: 13px;
+                            font-weight: 700;
+                            color: Theme.text_primary;
+                            vertical-alignment: center;
+                        }
                     }
 
                     HorizontalLayout {

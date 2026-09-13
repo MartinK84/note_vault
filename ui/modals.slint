@@ -36,11 +36,13 @@ export component UnlockModal inherits Rectangle {
             VerticalLayout {
                 spacing: 6px;
                 alignment: center;
+                cross-axis-alignment: center;
 
-                Text {
-                    text: "🔐";
-                    font-size: 32px;
-                    horizontal-alignment: center;
+                Image {
+                    source: @image-url("../assets/icons/lock.svg");
+                    width: 36px;
+                    height: 36px;
+                    colorize: Theme.accent;
                 }
 
                 Text {
@@ -127,11 +129,13 @@ export component LoadingModal inherits Rectangle {
             HorizontalLayout {
                 spacing: 10px;
                 alignment: center;
+                cross-axis-alignment: center;
 
-                Text {
-                    text: "🔄";
-                    font-size: 24px;
-                    vertical-alignment: center;
+                Image {
+                    source: @image-url("../assets/icons/refresh.svg");
+                    width: 24px;
+                    height: 24px;
+                    colorize: Theme.accent;
                 }
 
                 Text {
@@ -203,7 +207,7 @@ export component UnsavedWarningModal inherits Rectangle {
             alignment: center;
 
             Text {
-                text: "⚠️ Unsaved Changes";
+                text: "Unsaved Changes";
                 font-size: 16px;
                 font-weight: 700;
                 color: Theme.danger;
@@ -780,11 +784,13 @@ export component WelcomeModal inherits Rectangle {
             VerticalLayout {
                 spacing: 6px;
                 alignment: center;
+                cross-axis-alignment: center;
 
-                Text {
-                    text: "🗄️";
-                    font-size: 36px;
-                    horizontal-alignment: center;
+                Image {
+                    source: @image-url("../assets/icons/folder.svg");
+                    width: 40px;
+                    height: 40px;
+                    colorize: Theme.accent;
                 }
 
                 Text {
