@@ -46,7 +46,7 @@ export component UnlockModal inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 440px;
-        height: root.error_message != "" ? 245px : 225px;
+        height: root.error_message != "" ? 205px : 185px;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
@@ -59,33 +59,38 @@ export component UnlockModal inherits Rectangle {
             padding-left: 24px;
             padding-right: 24px;
             spacing: 12px;
-            alignment: center;
+            alignment: start;
 
             VerticalLayout {
                 spacing: 4px;
-                alignment: center;
-                cross-axis-alignment: center;
+                alignment: start;
 
-                Image {
-                    source: @image-url("../assets/icons/lock.svg");
-                    width: 32px;
-                    height: 32px;
-                    colorize: Theme.accent;
-                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    cross-axis-alignment: center;
 
-                Text {
-                    text: "Unlock Secure Vault";
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: Theme.text_primary;
-                    horizontal-alignment: center;
+                    Image {
+                        source: @image-url("../assets/icons/lock.svg");
+                        width: 20px;
+                        height: 20px;
+                        colorize: Theme.accent;
+                    }
+
+                    Text {
+                        text: "Unlock Secure Vault";
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Text {
                     text: "Enter your master passphrase to decrypt and access your notes.";
                     font-size: 12px;
                     color: Theme.text_secondary;
-                    horizontal-alignment: center;
+                    horizontal-alignment: left;
                     wrap: word-wrap;
                 }
             }
@@ -104,7 +109,7 @@ export component UnlockModal inherits Rectangle {
                 text: root.error_message;
                 font-size: 12px;
                 color: Theme.danger;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
             }
 
             HorizontalLayout {
@@ -163,17 +168,17 @@ export component LoadingModal inherits Rectangle {
             padding-left: 24px;
             padding-right: 24px;
             spacing: 12px;
-            alignment: center;
+            alignment: start;
 
             HorizontalLayout {
-                spacing: 10px;
-                alignment: center;
+                spacing: 8px;
+                alignment: start;
                 cross-axis-alignment: center;
 
                 Image {
                     source: @image-url("../assets/icons/refresh.svg");
-                    width: 22px;
-                    height: 22px;
+                    width: 20px;
+                    height: 20px;
                     colorize: Theme.accent;
                 }
 
@@ -246,21 +251,34 @@ export component UnsavedWarningModal inherits Rectangle {
             padding-left: 22px;
             padding-right: 22px;
             spacing: 10px;
-            alignment: center;
+            alignment: start;
 
-            Text {
-                text: "Unsaved Changes";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.danger;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/alert-triangle.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.danger;
+                }
+
+                Text {
+                    text: "Unsaved Changes";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.danger;
+                    vertical-alignment: center;
+                }
             }
 
             Text {
                 text: "You have unsaved changes. Do you want to discard them?";
                 font-size: 13px;
                 color: Theme.text_primary;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
                 wrap: word-wrap;
             }
 
@@ -331,14 +349,27 @@ export component DeleteFolderModal inherits Rectangle {
             padding-left: 22px;
             padding-right: 22px;
             spacing: 10px;
-            alignment: center;
+            alignment: start;
 
-            Text {
-                text: "Delete Folder";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.danger;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/trash.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.danger;
+                }
+
+                Text {
+                    text: "Delete Folder";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.danger;
+                    vertical-alignment: center;
+                }
             }
 
             Text {
@@ -346,7 +377,7 @@ export component DeleteFolderModal inherits Rectangle {
                 font-size: 14px;
                 font-weight: 600;
                 color: Theme.text_primary;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
                 overflow: elide;
             }
 
@@ -354,7 +385,7 @@ export component DeleteFolderModal inherits Rectangle {
                 text: "Are you sure? This will permanently delete all encrypted notes inside this folder.";
                 font-size: 12px;
                 color: Theme.danger;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
                 wrap: word-wrap;
             }
 
@@ -425,21 +456,34 @@ export component DeleteNoteModal inherits Rectangle {
             padding-left: 22px;
             padding-right: 22px;
             spacing: 10px;
-            alignment: center;
+            alignment: start;
 
-            Text {
-                text: "Delete Note";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.danger;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/trash.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.danger;
+                }
+
+                Text {
+                    text: "Delete Note";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.danger;
+                    vertical-alignment: center;
+                }
             }
 
             Text {
                 text: "Are you sure you want to permanently delete \"" + root.note_title + "\"?";
                 font-size: 13px;
                 color: Theme.text_primary;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
                 wrap: word-wrap;
             }
 
@@ -447,7 +491,7 @@ export component DeleteNoteModal inherits Rectangle {
                 text: "This action cannot be undone.";
                 font-size: 11px;
                 color: Theme.text_secondary;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
             }
 
             HorizontalLayout {
@@ -517,14 +561,27 @@ export component FolderModal inherits Rectangle {
             padding-left: 20px;
             padding-right: 20px;
             spacing: 12px;
-            alignment: center;
+            alignment: start;
 
-            Text {
-                text: "Create New Folder";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.text_primary;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/folder.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.accent;
+                }
+
+                Text {
+                    text: "Create New Folder";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text_primary;
+                    vertical-alignment: center;
+                }
             }
 
             folder_name_input := LineEdit {
@@ -608,14 +665,27 @@ export component RenameFolderModal inherits Rectangle {
             padding-left: 20px;
             padding-right: 20px;
             spacing: 12px;
-            alignment: center;
+            alignment: start;
 
-            Text {
-                text: "Rename Folder";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.text_primary;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/edit.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.accent;
+                }
+
+                Text {
+                    text: "Rename Folder";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text_primary;
+                    vertical-alignment: center;
+                }
             }
 
             rename_input := LineEdit {
@@ -700,27 +770,41 @@ export component MoveNoteModal inherits Rectangle {
             padding-left: 20px;
             padding-right: 20px;
             spacing: 10px;
-            alignment: center;
+            alignment: start;
 
-            Text {
-                text: "Move Note";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.text_primary;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/folder.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.accent;
+                }
+
+                Text {
+                    text: "Move Note";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text_primary;
+                    vertical-alignment: center;
+                }
             }
 
             Text {
                 text: "Move \"" + root.note_title + "\" to:";
                 font-size: 13px;
                 color: Theme.text_secondary;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
                 overflow: elide;
             }
 
             HorizontalLayout {
-                spacing: 6px;
-                alignment: center;
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
 
                 Text {
                     text: "Folder:";
@@ -807,14 +891,27 @@ export component AddTagModal inherits Rectangle {
             padding-left: 20px;
             padding-right: 20px;
             spacing: 12px;
-            alignment: center;
+            alignment: start;
 
-            Text {
-                text: "Add Tag";
-                font-size: 16px;
-                font-weight: 700;
-                color: Theme.text_primary;
-                horizontal-alignment: center;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/tag.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.accent;
+                }
+
+                Text {
+                    text: "Add Tag";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text_primary;
+                    vertical-alignment: center;
+                }
             }
 
             tag_input := LineEdit {
@@ -885,7 +982,7 @@ export component WelcomeModal inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 480px;
-        height: root.error_message != "" ? 260px : 240px;
+        height: root.error_message != "" ? 215px : 195px;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
@@ -898,33 +995,38 @@ export component WelcomeModal inherits Rectangle {
             padding-left: 24px;
             padding-right: 24px;
             spacing: 12px;
-            alignment: center;
+            alignment: start;
 
             VerticalLayout {
                 spacing: 4px;
-                alignment: center;
-                cross-axis-alignment: center;
+                alignment: start;
 
-                Image {
-                    source: @image-url("../assets/icons/folder.svg");
-                    width: 32px;
-                    height: 32px;
-                    colorize: Theme.accent;
-                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    cross-axis-alignment: center;
 
-                Text {
-                    text: "Welcome to NoteVault";
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: Theme.text_primary;
-                    horizontal-alignment: center;
+                    Image {
+                        source: @image-url("../assets/icons/folder.svg");
+                        width: 20px;
+                        height: 20px;
+                        colorize: Theme.accent;
+                    }
+
+                    Text {
+                        text: "Welcome to NoteVault";
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Text {
                     text: "Please select a directory on your system to store your encrypted notes.";
                     font-size: 12px;
                     color: Theme.text_secondary;
-                    horizontal-alignment: center;
+                    horizontal-alignment: left;
                     wrap: word-wrap;
                 }
             }
@@ -952,7 +1054,7 @@ export component WelcomeModal inherits Rectangle {
                 text: root.error_message;
                 font-size: 12px;
                 color: Theme.danger;
-                horizontal-alignment: center;
+                horizontal-alignment: left;
             }
 
             HorizontalLayout {
@@ -997,7 +1099,7 @@ export component ExportModal inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 500px;
-        height: root.is_exporting ? 330px : 280px;
+        height: root.is_exporting ? 295px : 245px;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
@@ -1010,34 +1112,39 @@ export component ExportModal inherits Rectangle {
             padding-left: 24px;
             padding-right: 24px;
             spacing: 12px;
-            alignment: center;
+            alignment: start;
 
             // Modal Header
             VerticalLayout {
                 spacing: 4px;
-                alignment: center;
-                cross-axis-alignment: center;
+                alignment: start;
 
-                Image {
-                    source: @image-url("../assets/icons/file.svg");
-                    width: 30px;
-                    height: 30px;
-                    colorize: Theme.accent;
-                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    cross-axis-alignment: center;
 
-                Text {
-                    text: "Export Vault to Markdown";
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: Theme.text_primary;
-                    horizontal-alignment: center;
+                    Image {
+                        source: @image-url("../assets/icons/file.svg");
+                        width: 20px;
+                        height: 20px;
+                        colorize: Theme.accent;
+                    }
+
+                    Text {
+                        text: "Export Vault to Markdown";
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Text {
                     text: "Decrypt all notes and save them as plain Markdown files with YAML frontmatter.";
                     font-size: 12px;
                     color: Theme.text_secondary;
-                    horizontal-alignment: center;
+                    horizontal-alignment: left;
                     wrap: word-wrap;
                 }
             }
@@ -1050,15 +1157,18 @@ export component ExportModal inherits Rectangle {
                 border-color: Theme.danger;
 
                 VerticalLayout {
-                    padding: 8px;
-                    alignment: center;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    alignment: start;
 
                     Text {
                         text: "⚠️ WARNING: Exported notes will be saved as plain text (.md) and will NO LONGER BE ENCRYPTED.";
                         font-size: 11px;
                         font-weight: 700;
                         color: Theme.danger;
-                        horizontal-alignment: center;
+                        horizontal-alignment: left;
                         wrap: word-wrap;
                     }
                 }
