@@ -96,6 +96,49 @@ fn format_unix_date(ts: i64) -> String {
     format!("{:04}-{:02}-{:02}", year, month, day)
 }
 
+/// Sanitizes a note title to produce a safe, filesystem-compatible filename.
+/// Replaces illegal characters (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`, and control characters) with `_`.
+/// Trims whitespace and leading/trailing dots.
+/// If the sanitized result is empty, falls back to `fallback_id`.
+pub fn sanitize_filename(title: &str, fallback_id: &str) -> String {
+    const ILLEGAL_CHARS: [char; 10] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0'];
+    let sanitized: String = title
+        .chars()
+        .map(|c| if ILLEGAL_CHARS.contains(&c) || c.is_control() { '_' } else { c })
+        .collect();
+
+    let trimmed = sanitized.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        return fallback_id.to_string();
+    }
+
+    // Guard against Windows-reserved filenames (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    let upper = trimmed.to_ascii_uppercase();
+    const RESERVED_NAMES: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED_NAMES.contains(&upper.as_str()) {
+        format!("{}_{}", trimmed, fallback_id)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Formats a note into a Markdown document with YAML frontmatter.
+/// Contains `title`, `category`, `tags` (as a JSON/YAML array), and `date`.
+pub fn format_markdown_export(note: &Note, category: &str, date_str: &str) -> String {
+    let title_escaped = serde_json::to_string(&note.title).unwrap_or_else(|_| "\"\"".to_string());
+    let category_escaped = serde_json::to_string(category).unwrap_or_else(|_| "\"\"".to_string());
+    let tags_array = serde_json::to_string(&note.tags).unwrap_or_else(|_| "[]".to_string());
+    let date_escaped = serde_json::to_string(date_str).unwrap_or_else(|_| "\"\"".to_string());
+
+    format!(
+        "---\ntitle: {}\ncategory: {}\ntags: {}\ndate: {}\n---\n\n{}",
+        title_escaped, category_escaped, tags_array, date_escaped, note.content
+    )
+}
+
 /// Re-builds and updates the Slint `folders`, `available_categories`, and `current_notes` models
 /// for the active 3-pane layout, filtering by `active_folder` and `search_query`.
 fn refresh_models(
@@ -541,6 +584,200 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .ok();
                 }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Browse Export Path Requested (rfd Native Folder Picker)
+    // -------------------------------------------------------------
+    main_window.on_browse_export_path_requested({
+        let window_weak = window_weak.clone();
+
+        move || {
+            let weak = window_weak.clone();
+            thread::spawn(move || {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    let path_str = folder.to_string_lossy().to_string();
+                    slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak.upgrade() {
+                            ui.set_export_path(path_str.as_str().into());
+                        }
+                    })
+                    .ok();
+                }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Start Vault Export Requested (Background Worker)
+    // -------------------------------------------------------------
+    main_window.on_start_export_requested({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let export_dir_str = ui.get_export_path().trim().to_string();
+            if export_dir_str.is_empty() {
+                ui.set_export_status("Please select an export directory first.".into());
+                return;
+            }
+
+            let export_dir = PathBuf::from(export_dir_str);
+
+            // Safely acquire session password. If locked, abort.
+            let password = match session_password.lock().unwrap().as_ref() {
+                Some(p) => p.clone(),
+                None => {
+                    ui.set_export_status("Error: Vault is locked. Unlock vault before exporting.".into());
+                    return;
+                }
+            };
+
+            // Clone metadata_store so we don't hold the mutex during the entire I/O process
+            let notes_to_export: Vec<(String, NoteMetaSummary)> = {
+                let store = metadata_store.lock().unwrap();
+                store.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            };
+
+            ui.set_is_exporting(true);
+            ui.set_export_progress(0.0);
+            ui.set_export_status("Starting export...".into());
+
+            let weak = window_weak.clone();
+
+            thread::spawn(move || {
+                let total_notes = notes_to_export.len();
+                if total_notes == 0 {
+                    let weak_ui = weak.clone();
+                    slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak_ui.upgrade() {
+                            ui.set_is_exporting(false);
+                            ui.set_export_progress(1.0);
+                            ui.set_show_export_modal(false);
+                            ui.set_vault_status_text("Vault exported (0 notes)".into());
+                        }
+                    })
+                    .ok();
+                    return;
+                }
+
+                let mut exported_count = 0usize;
+                let mut error_count = 0usize;
+
+                for (idx, (note_id, meta)) in notes_to_export.into_iter().enumerate() {
+                    let current_num = idx + 1;
+                    let progress = (idx as f32) / (total_notes as f32);
+                    let note_title_display = if meta.title.is_empty() {
+                        "Untitled".to_string()
+                    } else {
+                        meta.title.clone()
+                    };
+                    let status_msg = format!(
+                        "Exporting note {} of {}: \"{}\"",
+                        current_num, total_notes, note_title_display
+                    );
+
+                    let weak_ui = weak.clone();
+                    slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak_ui.upgrade() {
+                            ui.set_export_progress(progress);
+                            ui.set_export_status(status_msg.into());
+                        }
+                    })
+                    .ok();
+
+                    // Decrypt note payload
+                    match load_note_decrypted(&password, &meta.file_path) {
+                        Ok(mut decrypted_note) => {
+                            let category_name = if meta.category.trim().is_empty() {
+                                "General".to_string()
+                            } else {
+                                meta.category.trim().to_string()
+                            };
+
+                            let category_dir = export_dir.join(&category_name);
+                            if let Err(e) = std::fs::create_dir_all(&category_dir) {
+                                eprintln!(
+                                    "[Export] Failed to create folder {:?}: {}",
+                                    category_dir, e
+                                );
+                                error_count += 1;
+                                decrypted_note.zeroize();
+                                continue;
+                            }
+
+                            let safe_filename = sanitize_filename(&decrypted_note.title, &note_id);
+                            let mut target_file = category_dir.join(format!("{}.md", safe_filename));
+
+                            // Collision check: if a file with this name already exists, disambiguate with short UUID
+                            if target_file.exists() {
+                                let short_id = if note_id.len() >= 8 {
+                                    &note_id[..8]
+                                } else {
+                                    &note_id
+                                };
+                                target_file = category_dir.join(format!("{}_{}.md", safe_filename, short_id));
+                            }
+
+                            let date_str = format_unix_timestamp(decrypted_note.updated_at);
+                            let mut md_content = format_markdown_export(
+                                &decrypted_note,
+                                &category_name,
+                                &date_str,
+                            );
+
+                            if let Err(e) = std::fs::write(&target_file, md_content.as_bytes()) {
+                                eprintln!(
+                                    "[Export] Failed to write exported file {:?}: {}",
+                                    target_file, e
+                                );
+                                error_count += 1;
+                            } else {
+                                exported_count += 1;
+                            }
+
+                            // Zeroize memory buffers immediately
+                            decrypted_note.zeroize();
+                            md_content.zeroize();
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[Export] Failed to decrypt note at {:?}: {}",
+                                meta.file_path, e
+                            );
+                            error_count += 1;
+                        }
+                    }
+                }
+
+                let weak_ui = weak.clone();
+                let completion_msg = if error_count == 0 {
+                    format!("Vault exported ({} note(s) saved)", exported_count)
+                } else {
+                    format!(
+                        "Vault exported with {} error(s) ({} note(s) saved)",
+                        error_count, exported_count
+                    )
+                };
+
+                slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak_ui.upgrade() {
+                        ui.set_is_exporting(false);
+                        ui.set_export_progress(1.0);
+                        ui.set_show_export_modal(false);
+                        ui.set_vault_status_text(completion_msg.into());
+                    }
+                })
+                .ok();
+
+                println!(
+                    "[NoteVault] Export finished: {} exported, {} failed to {:?}",
+                    exported_count, error_count, export_dir
+                );
             });
         }
     });
@@ -1635,4 +1872,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run Slint GUI event loop
     main_window.run()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_filename_basic() {
+        assert_eq!(sanitize_filename("Simple Note Title", "fallback-id"), "Simple Note Title");
+    }
+
+    #[test]
+    fn test_sanitize_filename_illegal_characters() {
+        assert_eq!(
+            sanitize_filename("Note/With\\Illegal:Chars*?\"<>|Test", "fallback-id"),
+            "Note_With_Illegal_Chars______Test"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_filename_empty_fallback() {
+        assert_eq!(sanitize_filename("", "fallback-uuid-1234"), "fallback-uuid-1234");
+        assert_eq!(sanitize_filename("   ", "fallback-uuid-1234"), "fallback-uuid-1234");
+        assert_eq!(sanitize_filename("....", "fallback-uuid-1234"), "fallback-uuid-1234");
+        assert_eq!(sanitize_filename("/:*?", "fallback-uuid-1234"), "____");
+    }
+
+    #[test]
+    fn test_sanitize_filename_windows_reserved() {
+        assert_eq!(sanitize_filename("CON", "id123"), "CON_id123");
+        assert_eq!(sanitize_filename("prn", "id123"), "prn_id123");
+        assert_eq!(sanitize_filename("aux", "id123"), "aux_id123");
+        assert_eq!(sanitize_filename("nul", "id123"), "nul_id123");
+    }
+
+    #[test]
+    fn test_format_markdown_export() {
+        let note = Note::new(
+            "Project Ideas: 2026",
+            vec!["work".to_string(), "rust".to_string()],
+            "# Heading\n\nThis is a secret note.",
+        );
+        let category = "Projects";
+        let date_str = "2026-09-13 14:00:00 UTC";
+
+        let md = format_markdown_export(&note, category, date_str);
+
+        assert!(md.starts_with("---\n"));
+        assert!(md.contains("title: \"Project Ideas: 2026\"\n"));
+        assert!(md.contains("category: \"Projects\"\n"));
+        assert!(md.contains("tags: [\"work\",\"rust\"]\n"));
+        assert!(md.contains("date: \"2026-09-13 14:00:00 UTC\"\n"));
+        assert!(md.contains("---\n\n# Heading\n\nThis is a secret note."));
+    }
 }

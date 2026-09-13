@@ -10,7 +10,8 @@ import {
     RenameFolderModal, 
     MoveNoteModal, 
     AddTagModal,
-    WelcomeModal 
+    WelcomeModal,
+    ExportModal 
 } from "modals.slint";
 import { SettingsDialog } from "settings.slint";
 
@@ -113,6 +114,13 @@ export component MainWindow inherits Window {
     in property <bool> is_reencrypting: false;
     in property <float> reencrypt_progress: 0.0;
 
+    // --- Export Vault Modal State ---
+    in-out property <bool> show_export_modal: false;
+    in-out property <string> export_path: "";
+    in-out property <bool> is_exporting: false;
+    in-out property <float> export_progress: 0.0;
+    in-out property <string> export_status: "";
+
     // --- Welcome / Onboarding Modal State ---
     in-out property <bool> show_welcome_modal: false;
     in-out property <string> welcome_vault_path: "";
@@ -145,6 +153,10 @@ export component MainWindow inherits Window {
     callback welcome_open_vault_requested(string);
     callback exit_requested();
     callback theme_changed(string);
+
+    // Export callbacks
+    callback browse_export_path_requested();
+    callback start_export_requested();
 
     // ==========================================
     // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
@@ -214,8 +226,8 @@ export component MainWindow inherits Window {
                             }
 
                             file_popup := PopupWindow {
-                                width: 130px;
-                                height: 72px;
+                                width: 145px;
+                                height: 104px;
                                 x: 0px;
                                 y: 22px;
 
@@ -256,6 +268,36 @@ export component MainWindow inherits Window {
                                                     colorize: Theme.text_primary;
                                                 }
                                                 Text { text: "Settings"; font-size: 12px; color: Theme.text_primary; vertical-alignment: center; }
+                                            }
+                                        }
+
+                                        // Export Vault Item
+                                        Rectangle {
+                                            height: 30px;
+                                            border-radius: 4px;
+                                            background: export_item_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                                            export_item_touch := TouchArea {
+                                                clicked => {
+                                                    file_popup.close();
+                                                    root.show_export_modal = true;
+                                                }
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 8px;
+                                                padding-right: 8px;
+                                                spacing: 8px;
+                                                alignment: start;
+                                                cross-axis-alignment: center;
+
+                                                Image {
+                                                    source: @image-url("../assets/icons/file.svg");
+                                                    width: 14px;
+                                                    height: 14px;
+                                                    colorize: Theme.text_primary;
+                                                }
+                                                Text { text: "Export Vault"; font-size: 12px; color: Theme.text_primary; vertical-alignment: center; }
                                             }
                                         }
 
@@ -1292,6 +1334,22 @@ export component MainWindow inherits Window {
         }
         close_clicked => {
             root.show_settings_modal = false;
+        }
+    }
+
+    if root.show_export_modal : ExportModal {
+        export_path <=> root.export_path;
+        is_exporting: root.is_exporting;
+        export_progress: root.export_progress;
+        export_status: root.export_status;
+        browse => {
+            root.browse_export_path_requested();
+        }
+        start_export => {
+            root.start_export_requested();
+        }
+        cancel => {
+            root.show_export_modal = false;
         }
     }
 }

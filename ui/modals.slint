@@ -852,3 +852,167 @@ export component WelcomeModal inherits Rectangle {
         }
     }
 }
+
+// ==========================================
+// MODAL: EXPORT VAULT TO MARKDOWN
+// ==========================================
+export component ExportModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.overlay;
+
+    in-out property <string> export_path: "";
+    in property <bool> is_exporting: false;
+    in property <float> export_progress: 0.0;
+    in property <string> export_status: "";
+
+    callback browse();
+    callback start_export();
+    callback cancel();
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 500px;
+        height: root.is_exporting ? 390px : 340px;
+        background: Theme.bg_surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_active;
+        clip: true;
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+            alignment: center;
+
+            // Modal Header
+            VerticalLayout {
+                spacing: 6px;
+                alignment: center;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/file.svg");
+                    width: 36px;
+                    height: 36px;
+                    colorize: Theme.accent;
+                }
+
+                Text {
+                    text: "Export Vault to Markdown";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Theme.text_primary;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Decrypt all notes and save them as plain Markdown files with YAML frontmatter.";
+                    font-size: 12px;
+                    color: Theme.text_secondary;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Danger Warning Box
+            Rectangle {
+                background: Theme.is_dark ? #f38ba81a : #dc354518;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.danger;
+
+                VerticalLayout {
+                    padding: 10px;
+                    alignment: center;
+
+                    Text {
+                        text: "⚠️ WARNING: Exported notes will be saved as plain text (.md) and will NO LONGER BE ENCRYPTED.";
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.danger;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // Export Destination Directory Row
+            HorizontalLayout {
+                spacing: 8px;
+
+                LineEdit {
+                    text: root.export_path;
+                    placeholder-text: "No export directory selected...";
+                    font-size: 13px;
+                    enabled: false;
+                    read-only: true;
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: "Browse...";
+                    enabled: !root.is_exporting;
+                    clicked => {
+                        root.browse();
+                    }
+                }
+            }
+
+            // Progress Indicator (Only visible while exporting)
+            if root.is_exporting : VerticalLayout {
+                spacing: 6px;
+
+                HorizontalLayout {
+                    Text {
+                        text: root.export_status != "" ? root.export_status : "Exporting notes...";
+                        font-size: 12px;
+                        color: Theme.text_secondary;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: @tr("{0}%", Math.round(root.export_progress * 100));
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: Theme.accent;
+                    }
+                }
+
+                ProgressIndicator {
+                    progress: root.export_progress;
+                }
+            }
+
+            // Action Buttons
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    text: "Cancel";
+                    enabled: !root.is_exporting;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    text: "Start Export";
+                    primary: true;
+                    enabled: root.export_path != "" && !root.is_exporting;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.start_export();
+                    }
+                }
+            }
+        }
+    }
+}
