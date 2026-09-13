@@ -40,7 +40,7 @@ export component SettingsDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 700px;
-        height: 580px;
+        height: root.is_reencrypting ? 480px : 450px;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
@@ -48,8 +48,11 @@ export component SettingsDialog inherits Rectangle {
         clip: true;
 
         VerticalLayout {
-            padding: 24px;
-            spacing: 16px;
+            padding-top: 16px;
+            padding-bottom: 16px;
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 12px;
 
             // Dialog Header Bar
             HorizontalLayout {
@@ -82,17 +85,19 @@ export component SettingsDialog inherits Rectangle {
                     background: close_touch.has-hover ? Theme.hover : Colors.transparent;
 
                     close_touch := TouchArea {
+                        mouse-cursor: pointer;
                         clicked => {
                             root.close_clicked();
                         }
                     }
 
-                    Text {
-                        text: "✕";
-                        font-size: 14px;
-                        color: Theme.text_secondary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    Image {
+                        source: @image-url("../assets/icons/x.svg");
+                        width: 14px;
+                        height: 14px;
+                        colorize: close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
                     }
                 }
             }

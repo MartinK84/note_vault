@@ -43,6 +43,12 @@ export component MainWindow inherits Window {
         Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
     }
 
+    changed is_locked => {
+        if root.is_locked {
+            root.show_unlock_modal = true;
+        }
+    }
+
     // --- Dynamic 3-Pane Data Models ---
     in property <[string]> folders: [];
     in-out property <string> active_folder: "General";
@@ -52,6 +58,7 @@ export component MainWindow inherits Window {
 
     // --- State Properties ---
     in-out property <bool> is_locked: true;
+    in-out property <bool> show_unlock_modal: true;
     in-out property <bool> is_loading: false;
     in-out property <float> loading_progress: 0.0;
     in-out property <string> loading_status_text: "";
@@ -438,8 +445,13 @@ export component MainWindow inherits Window {
                                 lock_touch := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => {
-                                        root.is_locked = true;
-                                        root.lock_vault();
+                                        if root.is_locked {
+                                            root.show_unlock_modal = true;
+                                        } else {
+                                            root.is_locked = true;
+                                            root.show_unlock_modal = true;
+                                            root.lock_vault();
+                                        }
                                     }
                                 }
 
@@ -647,28 +659,12 @@ export component MainWindow inherits Window {
                             horizontal-stretch: 1;
                             vertical-alignment: center;
                         }
+                    }
 
-                        Rectangle {
-                            width: 22px;
-                            height: 22px;
-                            border-radius: 4px;
-                            background: gear_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                            gear_touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.open_settings_requested();
-                                }
-                            }
-
-                            Image {
-                                source: @image-url("../assets/icons/settings.svg");
-                                width: 13px;
-                                height: 13px;
-                                colorize: Theme.text_secondary;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                            }
+                    if root.is_locked : TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show_unlock_modal = true;
                         }
                     }
                 }
@@ -1283,11 +1279,14 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.is_locked && !root.is_loading && !root.show_welcome_modal : UnlockModal {
+    if root.is_locked && root.show_unlock_modal && !root.is_loading && !root.show_welcome_modal : UnlockModal {
         password <=> root.unlock_password;
         error_message: root.unlock_error_message;
         unlock(pwd) => {
             root.unlock_requested(pwd);
+        }
+        close => {
+            root.show_unlock_modal = false;
         }
     }
 
