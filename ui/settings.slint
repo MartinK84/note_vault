@@ -40,7 +40,7 @@ export component SettingsDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 700px;
-        height: root.is_reencrypting ? 480px : 450px;
+        height: root.is_reencrypting ? 430px : 395px;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
@@ -53,6 +53,7 @@ export component SettingsDialog inherits Rectangle {
             padding-left: 24px;
             padding-right: 24px;
             spacing: 12px;
+            alignment: start;
 
             // Dialog Header Bar
             HorizontalLayout {
@@ -289,10 +290,6 @@ export component SettingsDialog inherits Rectangle {
                 }
             }
 
-            Rectangle {
-                vertical-stretch: 1;
-                background: Colors.transparent;
-            }
 
             // Footer Action Buttons
             HorizontalLayout {

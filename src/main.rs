@@ -528,6 +528,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Slint Window
     let main_window = MainWindow::new()?;
+    main_window.window().set_size(slint::LogicalSize::new(1534.0, 740.0));
     let window_weak = main_window.as_weak();
 
     // Initialize Theme

@@ -27,7 +27,7 @@ export struct NoteMetadata {
 
 export component MainWindow inherits Window {
     title: "NoteVault - Secure Encrypted Notes";
-    preferred-width: 1180px;
+    preferred-width: 1534px;
     preferred-height: 740px;
     min-width: 960px;
     min-height: 600px;
@@ -963,14 +963,13 @@ export component MainWindow inherits Window {
             horizontal-stretch: 1;
             background: Theme.bg_main;
 
-            VerticalLayout {
+            if root.active_note_id != "" : VerticalLayout {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
                 padding: 0px;
                 spacing: 0px;
-
-                if root.active_note_id != "" : VerticalLayout {
-                    padding: 0px;
-                    spacing: 0px;
-                    vertical-stretch: 1;
 
                     // Single-line Metadata Header Bar (Height 52px)
                     Rectangle {
@@ -1182,31 +1181,35 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
-                }
+            }
 
-                if root.active_note_id == "" : Rectangle {
-                    vertical-stretch: 1;
-                    background: Theme.bg_main;
+            if root.active_note_id == "" : Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                background: Theme.bg_main;
 
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 12px;
-                        cross-axis-alignment: center;
+                VerticalLayout {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    spacing: 12px;
+                    alignment: center;
+                    cross-axis-alignment: center;
 
-                        Image {
-                            source: @image-url("../assets/icons/file.svg");
-                            width: 48px;
-                            height: 48px;
-                            colorize: Theme.text_muted;
-                        }
+                    Image {
+                        source: @image-url("../assets/icons/file.svg");
+                        width: 48px;
+                        height: 48px;
+                        colorize: Theme.text_muted;
+                    }
 
-                        Text {
-                            text: "Select a note or create a new one";
-                            font-size: 15px;
-                            font-weight: 600;
-                            color: Theme.text_secondary;
-                            horizontal-alignment: center;
-                        }
+                    Text {
+                        text: "Select a note or create a new one";
+                        font-size: 15px;
+                        font-weight: 600;
+                        color: Theme.text_secondary;
+                        horizontal-alignment: center;
                     }
                 }
             }
