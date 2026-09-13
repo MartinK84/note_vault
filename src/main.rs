@@ -1223,14 +1223,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "new_note" => {
                     let cur_folder = active_folder.lock().unwrap().clone();
-                    let target_category = if cur_folder == "*All Notes*" {
-                        "General".to_string()
-                    } else {
-                        cur_folder
-                    };
+                    if cur_folder == "*All Notes*" {
+                        return;
+                    }
                     ui.set_active_note_id("new".into());
                     ui.set_note_title("Untitled Note".into());
-                    ui.set_note_category(target_category.into());
+                    ui.set_note_category(cur_folder.into());
                     ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                     ui.set_note_date("Just now".into());
                     ui.set_note_content("".into());
@@ -1503,14 +1501,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
             let cur_folder = active_folder.lock().unwrap().clone();
-            let target_category = if cur_folder == "*All Notes*" {
-                "General".to_string()
-            } else {
-                cur_folder
-            };
+            if cur_folder == "*All Notes*" {
+                return;
+            }
             ui.set_active_note_id("new".into());
             ui.set_note_title("Untitled Note".into());
-            ui.set_note_category(target_category.into());
+            ui.set_note_category(cur_folder.into());
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("Just now".into());
             ui.set_note_content("".into());

@@ -786,7 +786,7 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        Rectangle {
+                        if root.active_folder != "*All Notes*" : Rectangle {
                             height: 28px;
                             width: 32px;
                             border-radius: 4px;
