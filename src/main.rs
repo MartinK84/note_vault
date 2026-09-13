@@ -188,7 +188,9 @@ fn refresh_models(
     // 2. Validate and retrieve current active_folder
     let current_active_folder = {
         let mut active = active_folder.lock().unwrap();
-        if active.is_empty() || (!folders_list.is_empty() && !folders_list.contains(&*active)) {
+        if *active != "*All Notes*"
+            && (active.is_empty() || (!folders_list.is_empty() && !folders_list.contains(&*active)))
+        {
             *active = folders_list.first().cloned().unwrap_or_else(|| "General".to_string());
         }
         active.clone()
@@ -201,7 +203,7 @@ fn refresh_models(
     let mut filtered_notes: Vec<(String, NoteMetaSummary)> = Vec::new();
 
     for (id, meta) in store.iter() {
-        if meta.category != current_active_folder {
+        if current_active_folder != "*All Notes*" && meta.category != current_active_folder {
             continue;
         }
 
@@ -1078,7 +1080,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let v_path = vault_path.lock().unwrap().clone();
             *active_folder.lock().unwrap() = folder.to_string();
             ui.set_active_folder(folder.clone());
-            ui.set_note_category(folder);
+            let note_cat = if folder == "*All Notes*" {
+                "General".to_string()
+            } else {
+                folder.to_string()
+            };
+            ui.set_note_category(note_cat.into());
             ui.set_active_note_id("".into());
             ui.set_note_title("".into());
             ui.set_note_content("".into());
@@ -1201,7 +1208,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let v_path = vault_path.lock().unwrap().clone();
                     *active_folder.lock().unwrap() = payload.clone();
                     ui.set_active_folder(payload.clone().into());
-                    ui.set_note_category(payload.into());
+                    let note_cat = if payload == "*All Notes*" {
+                        "General".to_string()
+                    } else {
+                        payload.clone()
+                    };
+                    ui.set_note_category(note_cat.into());
                     ui.set_active_note_id("".into());
                     ui.set_note_title("".into());
                     ui.set_note_content("".into());
@@ -1211,9 +1223,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "new_note" => {
                     let cur_folder = active_folder.lock().unwrap().clone();
+                    let target_category = if cur_folder == "*All Notes*" {
+                        "General".to_string()
+                    } else {
+                        cur_folder
+                    };
                     ui.set_active_note_id("new".into());
                     ui.set_note_title("Untitled Note".into());
-                    ui.set_note_category(cur_folder.into());
+                    ui.set_note_category(target_category.into());
                     ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                     ui.set_note_date("Just now".into());
                     ui.set_note_content("".into());
@@ -1345,7 +1362,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if target_category.is_empty() {
                 target_category = active_folder.lock().unwrap().clone();
             }
-            if target_category.is_empty() {
+            if target_category == "*All Notes*" || target_category.is_empty() {
                 target_category = "General".to_string();
             }
 
@@ -1460,12 +1477,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
 
-            *active_folder.lock().unwrap() = target_category.clone();
+            let was_all_notes = active_folder.lock().unwrap().as_str() == "*All Notes*";
+            if !was_all_notes {
+                *active_folder.lock().unwrap() = target_category.clone();
+                ui.set_active_folder(target_category.clone().into());
+            }
 
             ui.set_active_note_id(saved_id.into());
             ui.set_note_date(formatted_date.into());
             ui.set_note_category(target_category.clone().into());
-            ui.set_active_folder(target_category.into());
             ui.set_has_unsaved_changes(false);
 
             refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
@@ -1483,9 +1503,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
             let cur_folder = active_folder.lock().unwrap().clone();
+            let target_category = if cur_folder == "*All Notes*" {
+                "General".to_string()
+            } else {
+                cur_folder
+            };
             ui.set_active_note_id("new".into());
             ui.set_note_title("Untitled Note".into());
-            ui.set_note_category(cur_folder.into());
+            ui.set_note_category(target_category.into());
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("Just now".into());
             ui.set_note_content("".into());

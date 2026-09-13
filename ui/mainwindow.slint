@@ -483,6 +483,63 @@ export component MainWindow inherits Window {
                         spacing: 3px;
                         alignment: start;
 
+                        // All Notes static global view item
+                        Rectangle {
+                            height: 32px;
+                            border-radius: 6px;
+                            background: root.active_folder == "*All Notes*" ? Theme.bg_active : (all_notes_touch.has-hover ? Theme.hover : Colors.transparent);
+
+                            all_notes_touch := TouchArea {
+                                clicked => {
+                                    if root.active_folder == "*All Notes*" {
+                                        return;
+                                    }
+                                    if root.has_unsaved_changes {
+                                        root.pending_action_type = "select_folder";
+                                        root.pending_action_payload = "*All Notes*";
+                                        root.show_unsaved_warning = true;
+                                    } else {
+                                        root.active_folder = "*All Notes*";
+                                        root.folder_selected("*All Notes*");
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                alignment: start;
+                                cross-axis-alignment: center;
+
+                                Image {
+                                    source: @image-url("../assets/icons/layers.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.active_folder == "*All Notes*" ? Theme.accent : Theme.text_primary;
+                                }
+
+                                Text {
+                                    text: "All Notes";
+                                    font-size: 13px;
+                                    font-weight: root.active_folder == "*All Notes*" ? 600 : 400;
+                                    color: root.active_folder == "*All Notes*" ? Theme.accent : Theme.text_primary;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border;
+                            }
+                        }
+
                         for folder in root.folders : Rectangle {
                             height: 32px;
                             border-radius: 6px;
