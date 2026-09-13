@@ -1,4 +1,4 @@
-import { Button, LineEdit, TextEdit, ScrollView, ProgressIndicator, ComboBox } from "std-widgets.slint";
+import { Button, LineEdit, TextEdit, ScrollView, ProgressIndicator, ComboBox, Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { 
     UnlockModal, 
@@ -14,7 +14,7 @@ import {
 } from "modals.slint";
 import { SettingsDialog } from "settings.slint";
 
-export { Theme }
+export { Theme, Palette }
 
 export struct NoteMetadata {
     id: string,
@@ -30,8 +30,17 @@ export component MainWindow inherits Window {
     preferred-height: 740px;
     min-width: 960px;
     min-height: 600px;
-    background: Theme.background;
+    background: Theme.bg_main;
     default-font-family: "Segoe UI, Inter, sans-serif";
+
+    init => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    property <bool> is_dark: Theme.is_dark;
+    changed is_dark => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+    }
 
     // --- Dynamic 3-Pane Data Models ---
     in property <[string]> folders: [];
@@ -135,6 +144,7 @@ export component MainWindow inherits Window {
     callback change_password_requested(string, string, string); // current, new, confirm
     callback welcome_open_vault_requested(string);
     callback exit_requested();
+    callback theme_changed(string);
 
     // ==========================================
     // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
@@ -148,7 +158,7 @@ export component MainWindow inherits Window {
         // -------------------------------------------------------------
         Rectangle {
             width: 210px;
-            background: Theme.surface_secondary;
+            background: Theme.bg_secondary;
 
             // 1px right border divider
             Rectangle {
@@ -166,7 +176,7 @@ export component MainWindow inherits Window {
                 // Top Sleek Menu Bar Strip (Height 26px)
                 Rectangle {
                     height: 26px;
-                    background: Theme.surface_secondary;
+                    background: Theme.bg_secondary;
 
                     Rectangle {
                         x: 0px;
@@ -185,7 +195,7 @@ export component MainWindow inherits Window {
                             width: 38px;
                             height: 20px;
                             border-radius: 4px;
-                            background: file_menu_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                            background: file_menu_touch.has-hover ? Theme.hover : Colors.transparent;
                             y: (parent.height - self.height) / 2;
 
                             file_menu_touch := TouchArea {
@@ -198,7 +208,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: "File";
                                 font-size: 12px;
-                                color: Theme.text;
+                                color: Theme.text_primary;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -210,10 +220,10 @@ export component MainWindow inherits Window {
                                 y: 22px;
 
                                 Rectangle {
-                                    background: Theme.surface;
+                                    background: Theme.bg_surface;
                                     border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: Theme.border_strong;
+                                    border-color: Theme.border_active;
 
                                     VerticalLayout {
                                         padding: 4px;
@@ -223,7 +233,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: settings_item_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                                            background: settings_item_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             settings_item_touch := TouchArea {
                                                 clicked => {
@@ -239,7 +249,7 @@ export component MainWindow inherits Window {
                                                 alignment: start;
 
                                                 Text { text: "⚙️"; font-size: 12px; vertical-alignment: center; }
-                                                Text { text: "Settings"; font-size: 12px; color: Theme.text; vertical-alignment: center; }
+                                                Text { text: "Settings"; font-size: 12px; color: Theme.text_primary; vertical-alignment: center; }
                                             }
                                         }
 
@@ -247,7 +257,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: exit_item_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                                            background: exit_item_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             exit_item_touch := TouchArea {
                                                 clicked => {
@@ -277,7 +287,7 @@ export component MainWindow inherits Window {
                 Rectangle {
                     height: 48px;
                     vertical-stretch: 0;
-                    background: Theme.surface_secondary;
+                    background: Theme.bg_secondary;
 
                     Rectangle {
                         x: 0px;
@@ -298,14 +308,14 @@ export component MainWindow inherits Window {
                             text: "FOLDERS";
                             font-size: 11px;
                             font-weight: 700;
-                            color: Theme.text_muted;
+                            color: Theme.text_secondary;
                             letter-spacing: 1px;
                             vertical-alignment: center;
                         }
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: transparent;
+                            background: Colors.transparent;
                         }
 
                         HorizontalLayout {
@@ -368,7 +378,7 @@ export component MainWindow inherits Window {
                         for folder in root.folders : Rectangle {
                             height: 32px;
                             border-radius: 6px;
-                            background: root.active_folder == folder ? Theme.surface_active : (folder_touch.has-hover ? Theme.surface_hover : Colors.transparent);
+                            background: root.active_folder == folder ? Theme.bg_active : (folder_touch.has-hover ? Theme.hover : Colors.transparent);
 
                             folder_menu := PopupWindow {
                                 width: 140px;
@@ -377,10 +387,10 @@ export component MainWindow inherits Window {
                                 y: folder_touch.mouse-y;
 
                                 Rectangle {
-                                    background: Theme.surface;
+                                    background: Theme.bg_surface;
                                     border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: Theme.border_strong;
+                                    border-color: Theme.border_active;
 
                                     VerticalLayout {
                                         padding: 4px;
@@ -391,7 +401,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: ren_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                                            background: ren_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             ren_touch := TouchArea {
                                                 clicked => {
@@ -416,7 +426,7 @@ export component MainWindow inherits Window {
                                                 Text {
                                                     text: "Rename Folder";
                                                     font-size: 12px;
-                                                    color: Theme.text;
+                                                    color: Theme.text_primary;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -426,7 +436,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: del_f_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                                            background: del_f_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             del_f_touch := TouchArea {
                                                 clicked => {
@@ -496,7 +506,7 @@ export component MainWindow inherits Window {
                                     text: folder;
                                     font-size: 13px;
                                     font-weight: root.active_folder == folder ? 600 : 400;
-                                    color: root.active_folder == folder ? Theme.primary : Theme.text;
+                                    color: root.active_folder == folder ? Theme.accent : Theme.text_primary;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                     overflow: elide;
@@ -509,7 +519,7 @@ export component MainWindow inherits Window {
                 // Pane 1 Footer Status & Settings Access
                 Rectangle {
                     height: 32px;
-                    background: Theme.surface_secondary;
+                    background: Theme.bg_secondary;
 
                     Rectangle {
                         x: 0px;
@@ -536,7 +546,7 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.vault_status_text;
                             font-size: 10px;
-                            color: Theme.text_muted;
+                            color: Theme.text_secondary;
                             overflow: elide;
                             horizontal-stretch: 1;
                             vertical-alignment: center;
@@ -546,7 +556,7 @@ export component MainWindow inherits Window {
                             width: 22px;
                             height: 22px;
                             border-radius: 4px;
-                            background: gear_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                            background: gear_touch.has-hover ? Theme.hover : Colors.transparent;
 
                             gear_touch := TouchArea {
                                 mouse-cursor: pointer;
@@ -572,7 +582,7 @@ export component MainWindow inherits Window {
         // -------------------------------------------------------------
         Rectangle {
             width: 300px;
-            background: Theme.surface;
+            background: Theme.bg_surface;
 
             // 1px right border divider
             Rectangle {
@@ -591,7 +601,7 @@ export component MainWindow inherits Window {
                 Rectangle {
                     height: 52px;
                     vertical-stretch: 0;
-                    background: Theme.surface;
+                    background: Theme.bg_surface;
 
                     Rectangle {
                         x: 0px;
@@ -648,9 +658,9 @@ export component MainWindow inherits Window {
                         for note in root.current_notes : Rectangle {
                             height: 60px;
                             border-radius: 6px;
-                            background: root.active_note_id == note.id ? Theme.surface_active : (card_touch.has-hover ? Theme.surface_hover : Theme.surface_secondary);
+                            background: root.active_note_id == note.id ? Theme.bg_active : (card_touch.has-hover ? Theme.hover : Theme.bg_secondary);
                             border-width: root.active_note_id == note.id ? 1px : 0px;
-                            border-color: Theme.border_strong;
+                            border-color: Theme.border_active;
 
                             note_menu := PopupWindow {
                                 width: 140px;
@@ -659,10 +669,10 @@ export component MainWindow inherits Window {
                                 y: card_touch.mouse-y;
 
                                 Rectangle {
-                                    background: Theme.surface;
+                                    background: Theme.bg_surface;
                                     border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: Theme.border_strong;
+                                    border-color: Theme.border_active;
 
                                     VerticalLayout {
                                         padding: 4px;
@@ -673,7 +683,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: move_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                                            background: move_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             move_touch := TouchArea {
                                                 clicked => {
@@ -699,7 +709,7 @@ export component MainWindow inherits Window {
                                                 Text {
                                                     text: "Move Note";
                                                     font-size: 12px;
-                                                    color: Theme.text;
+                                                    color: Theme.text_primary;
                                                     vertical-alignment: center;
                                                 }
                                             }
@@ -709,7 +719,7 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: del_touch.has-hover ? Theme.surface_hover : Colors.transparent;
+                                            background: del_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             del_touch := TouchArea {
                                                 clicked => {
@@ -775,7 +785,7 @@ export component MainWindow inherits Window {
                                     text: note.title != "" ? note.title : "Untitled";
                                     font-size: 13px;
                                     font-weight: 600;
-                                    color: root.active_note_id == note.id ? Theme.primary : Theme.text;
+                                    color: root.active_note_id == note.id ? Theme.accent : Theme.text_primary;
                                     overflow: elide;
                                 }
 
@@ -786,7 +796,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: "🏷️ " + (note.tags != "" ? note.tags : "No tags");
                                         font-size: 11px;
-                                        color: Theme.text_muted;
+                                        color: Theme.text_secondary;
                                         overflow: elide;
                                         horizontal-stretch: 1;
                                         vertical-alignment: center;
@@ -795,7 +805,7 @@ export component MainWindow inherits Window {
                                     Text {
                                         text: note.date;
                                         font-size: 10px;
-                                        color: Theme.text_muted;
+                                        color: Theme.text_secondary;
                                         horizontal-alignment: right;
                                         vertical-alignment: center;
                                     }
@@ -811,7 +821,7 @@ export component MainWindow inherits Window {
                             Text {
                                 text: root.search_query != "" ? "No matching notes" : "No notes in this folder";
                                 font-size: 12px;
-                                color: Theme.text_muted;
+                                color: Theme.text_secondary;
                                 horizontal-alignment: center;
                             }
                         }
@@ -825,7 +835,7 @@ export component MainWindow inherits Window {
         // -------------------------------------------------------------
         Rectangle {
             horizontal-stretch: 1;
-            background: Theme.background;
+            background: Theme.bg_main;
 
             VerticalLayout {
                 padding: 0px;
@@ -840,7 +850,7 @@ export component MainWindow inherits Window {
                     Rectangle {
                         height: 52px;
                         vertical-stretch: 0;
-                        background: Theme.surface;
+                        background: Theme.bg_surface;
 
                         Rectangle {
                             x: 0px;
@@ -877,9 +887,9 @@ export component MainWindow inherits Window {
                                 for tag[idx] in root.note_tags : Rectangle {
                                     height: 24px;
                                     border-radius: 12px;
-                                    background: Theme.surface_active;
+                                    background: Theme.bg_active;
                                     border-width: 1px;
-                                    border-color: Theme.border_strong;
+                                    border-color: Theme.border_active;
 
                                     HorizontalLayout {
                                         padding-left: 8px;
@@ -891,7 +901,7 @@ export component MainWindow inherits Window {
                                             text: "#" + tag;
                                             font-size: 11px;
                                             font-weight: 500;
-                                            color: Theme.primary;
+                                            color: Theme.accent;
                                             vertical-alignment: center;
                                         }
 
@@ -899,7 +909,7 @@ export component MainWindow inherits Window {
                                             width: 14px;
                                             height: 14px;
                                             border-radius: 7px;
-                                            background: tag_del_touch.has-hover ? Theme.border_strong : Colors.transparent;
+                                            background: tag_del_touch.has-hover ? Theme.border_active : Colors.transparent;
 
                                             tag_del_touch := TouchArea {
                                                 clicked => {
@@ -932,7 +942,7 @@ export component MainWindow inherits Window {
 
                             Rectangle {
                                 horizontal-stretch: 1;
-                                background: transparent;
+                                background: Colors.transparent;
                             }
 
                             HorizontalLayout {
@@ -948,7 +958,7 @@ export component MainWindow inherits Window {
                                 Text {
                                     text: root.note_date != "" ? root.note_date : "No date";
                                     font-size: 11px;
-                                    color: Theme.text_muted;
+                                    color: Theme.text_secondary;
                                     vertical-alignment: center;
                                 }
                             }
@@ -958,7 +968,7 @@ export component MainWindow inherits Window {
                                 border-radius: 6px;
                                 background: root.has_unsaved_changes
                                     ? (save_touch.has-hover ? Theme.danger_hover : Theme.danger)
-                                    : (save_touch.has-hover ? Theme.surface_hover : Theme.surface_active);
+                                    : (save_touch.has-hover ? Theme.hover : Theme.bg_active);
                                 animate background { duration: 150ms; }
 
                                 save_touch := TouchArea {
@@ -982,7 +992,7 @@ export component MainWindow inherits Window {
                                         text: "💾 Save";
                                         font-size: 13px;
                                         font-weight: 600;
-                                        color: root.has_unsaved_changes ? Theme.primary_text : Theme.text_secondary;
+                                        color: root.has_unsaved_changes ? Theme.danger_text : Theme.text_secondary;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -993,7 +1003,7 @@ export component MainWindow inherits Window {
                     // Text Editor Area
                     Rectangle {
                         vertical-stretch: 1;
-                        background: Theme.background;
+                        background: Theme.bg_main;
 
                         VerticalLayout {
                             padding: 16px;
@@ -1010,7 +1020,7 @@ export component MainWindow inherits Window {
 
                 if root.active_note_id == "" : Rectangle {
                     vertical-stretch: 1;
-                    background: Theme.background;
+                    background: Theme.bg_main;
 
                     VerticalLayout {
                         alignment: center;
@@ -1026,7 +1036,7 @@ export component MainWindow inherits Window {
                             text: "Select a note or create a new one";
                             font-size: 15px;
                             font-weight: 600;
-                            color: Theme.text_muted;
+                            color: Theme.text_secondary;
                             horizontal-alignment: center;
                         }
                     }
@@ -1152,6 +1162,9 @@ export component MainWindow inherits Window {
         }
         change_password(cur, new_pwd, confirm) => {
             root.change_password_requested(cur, new_pwd, confirm);
+        }
+        theme_changed(theme) => {
+            root.theme_changed(theme);
         }
         close_clicked => {
             root.show_settings_modal = false;

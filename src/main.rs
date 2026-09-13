@@ -488,9 +488,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window_weak = main_window.as_weak();
 
     // Initialize Theme
-    let theme_mode = if config.theme == "light" { "light" } else { "dark" };
-    main_window.global::<Theme>().set_mode(theme_mode.into());
-    main_window.set_settings_theme(theme_mode.into());
+    let is_dark = config.theme == "dark";
+    main_window.global::<Theme>().set_is_dark(is_dark);
+    main_window.set_settings_theme(if is_dark { "dark".into() } else { "light".into() });
 
     let theme_options_model: slint::ModelRc<slint::SharedString> =
         std::rc::Rc::new(slint::VecModel::from(vec!["dark".into(), "light".into()])).into();
@@ -597,9 +597,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cur_path = vault_path.lock().unwrap().to_string_lossy().to_string();
             let cur_multi = use_multithreading.load(Ordering::Relaxed);
             let cur_theme = app_config.lock().unwrap().theme.clone();
+            let is_dark = cur_theme == "dark";
 
             ui.set_settings_vault_path(cur_path.into());
             ui.set_settings_use_multithreading(cur_multi);
+            ui.global::<Theme>().set_is_dark(is_dark);
             ui.set_settings_theme(cur_theme.into());
             ui.set_settings_cur_pwd("".into());
             ui.set_settings_new_pwd("".into());
@@ -641,7 +643,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // 2. Apply theme dynamically
-            ui.global::<Theme>().set_mode(new_theme_clean.as_str().into());
+            ui.global::<Theme>().set_is_dark(new_theme_clean == "dark");
 
             // 3. Update multithreading state
             use_multithreading.store(new_multi, Ordering::Relaxed);
@@ -678,6 +680,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             ui.set_show_settings_modal(false);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Theme Changed from Settings ComboBox
+    // -------------------------------------------------------------
+    main_window.on_theme_changed({
+        let window_weak = window_weak.clone();
+        move |theme_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            ui.global::<Theme>().set_is_dark(theme_str.trim() == "dark");
         }
     });
 
