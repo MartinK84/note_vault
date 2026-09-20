@@ -188,4 +188,21 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_theme_options_persistence() {
+        for theme_name in &["dark", "blue", "light"] {
+            let temp_dir = std::env::temp_dir().join(format!("note_vault_config_{}", Uuid::new_v4()));
+            let config_path = temp_dir.join("theme_config.json");
+
+            let mut config = AppConfig::default();
+            config.theme = theme_name.to_string();
+
+            config.save_to_path(&config_path).expect("Saving config should succeed");
+            let loaded = AppConfig::load_from_path(&config_path);
+            assert_eq!(loaded.theme, *theme_name);
+
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
+    }
 }

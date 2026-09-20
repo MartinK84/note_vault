@@ -16,7 +16,7 @@ export component SettingsDialog inherits Rectangle {
     in-out property <string> vault_path: "";
     in-out property <bool> use_multithreading: true;
     in-out property <string> theme: "dark";
-    in property <[string]> theme_options: ["dark", "light"];
+    in property <[string]> theme_options: ["dark", "blue", "light"];
     in-out property <string> global_hotkey: "Shift+Space";
     in-out property <bool> minimize_to_tray: true;
     in-out property <bool> is_recording_hotkey: false;
@@ -238,7 +238,7 @@ export component SettingsDialog inherits Rectangle {
                                         text: "Cancel";
                                         font-size: 11px;
                                         font-weight: 600;
-                                        color: Colors.white;
+                                        color: Theme.danger_text;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
@@ -284,8 +284,9 @@ export component SettingsDialog inherits Rectangle {
                         current-value: root.theme;
                         selected(val) => {
                             root.theme = val;
-                            Theme.is_dark = (val == "dark");
-                            Palette.color-scheme = (val == "dark") ? ColorScheme.dark : ColorScheme.light;
+                            Theme.theme = val;
+                            Theme.is_dark = (val != "light");
+                            Palette.color-scheme = (val != "light") ? ColorScheme.dark : ColorScheme.light;
                             root.theme_changed(val);
                         }
                     }

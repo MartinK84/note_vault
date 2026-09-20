@@ -1,31 +1,98 @@
 import { Palette } from "std-widgets.slint";
 
 export global Theme {
-    in-out property <bool> is_dark: true;
+    in-out property <string> theme: "dark";
+    in-out property <bool> is_dark: theme != "light";
+
+    changed theme => {
+        is_dark = (theme != "light");
+        Palette.color-scheme = (theme != "light") ? ColorScheme.dark : ColorScheme.light;
+    }
 
     changed is_dark => {
         Palette.color-scheme = is_dark ? ColorScheme.dark : ColorScheme.light;
     }
 
     // Palette tokens
-    out property <color> bg_main: is_dark ? #181825 : #f8f9fa;
-    out property <color> bg_surface: is_dark ? #1e1e2e : #ffffff;
-    out property <color> bg_secondary: is_dark ? #181825 : #f1f3f5;
-    out property <color> bg_active: is_dark ? #313244 : #dee2e6;
-    out property <color> border: is_dark ? #313244 : #dee2e6;
-    out property <color> border_active: is_dark ? #45475a : #adb5bd;
-    out property <color> text_primary: is_dark ? #cdd6f4 : #1a1a24;
-    out property <color> text_secondary: is_dark ? #a6adc8 : #495057;
-    out property <color> text_muted: is_dark ? #9399b2 : #6c757d;
-    out property <color> accent: is_dark ? #89b4fa : #0d6efd;
-    out property <color> accent_hover: is_dark ? #b4befe : #0b5ed7;
-    out property <color> accent_text: is_dark ? #11111b : #ffffff;
-    out property <color> danger: is_dark ? #f38ba8 : #dc3545;
-    out property <color> danger_hover: is_dark ? #f5a0b8 : #bb2d3b;
-    out property <color> danger_text: is_dark ? #11111b : #ffffff;
-    out property <color> success: is_dark ? #a6e3a1 : #198754;
-    out property <color> hover: is_dark ? #313244 : #e9ecef;
-    out property <color> overlay: is_dark ? #000000bd : #00000040;
+    out property <color> bg_main:
+        theme == "dark" ? #202020 :
+        (theme == "blue" ? #181825 : #f8f9fa);
+
+    out property <color> bg_surface:
+        theme == "dark" ? #2c2c2c :
+        (theme == "blue" ? #1e1e2e : #ffffff);
+
+    out property <color> bg_secondary:
+        theme == "dark" ? #1f1f1f :
+        (theme == "blue" ? #181825 : #f1f3f5);
+
+    out property <color> bg_active:
+        theme == "dark" ? #383838 :
+        (theme == "blue" ? #313244 : #dee2e6);
+
+    out property <color> border:
+        theme == "dark" ? #383838 :
+        (theme == "blue" ? #313244 : #dee2e6);
+
+    out property <color> border_active:
+        theme == "dark" ? #4d4d4d :
+        (theme == "blue" ? #45475a : #adb5bd);
+
+    out property <color> text_primary:
+        theme == "dark" ? #ffffff :
+        (theme == "blue" ? #cdd6f4 : #1a1a24);
+
+    out property <color> text_secondary:
+        theme == "dark" ? #b0b0b0 :
+        (theme == "blue" ? #a6adc8 : #495057);
+
+    out property <color> text_muted:
+        theme == "dark" ? #767676 :
+        (theme == "blue" ? #9399b2 : #6c757d);
+
+    out property <color> accent:
+        theme == "dark" ? #ff9720ff :
+        (theme == "blue" ? #89b4fa : #0d6efd);
+
+    out property <color> accent_hover:
+        theme == "dark" ? #565656ff :
+        (theme == "blue" ? #b4befe : #0b5ed7);
+
+    out property <color> accent_text:
+        theme == "dark" ? #000000 :
+        (theme == "blue" ? #11111b : #ffffff);
+
+    out property <color> danger:
+        theme == "dark" ? #ff6b6b :
+        (theme == "blue" ? #f38ba8 : #dc3545);
+
+    out property <color> danger_hover:
+        theme == "dark" ? #ff8585 :
+        (theme == "blue" ? #f5a0b8 : #bb2d3b);
+
+    out property <color> danger_text:
+        theme == "dark" ? #000000 :
+        (theme == "blue" ? #11111b : #ffffff);
+
+    out property <color> danger_subtle:
+        theme == "dark" ? #ff6b6b1a :
+        (theme == "blue" ? #f38ba81a : #dc354518);
+
+    out property <color> success:
+        theme == "dark" ? #6ccb5f :
+        (theme == "blue" ? #a6e3a1 : #198754);
+
+    out property <color> hover:
+        theme == "dark" ? #323232 :
+        (theme == "blue" ? #313244 : #e9ecef);
+
+    out property <color> overlay:
+        theme == "dark" ? #000000bd :
+        (theme == "blue" ? #000000bd : #00000040);
+
+    out property <color> line_highlight:
+        theme == "dark" ? #2d2d2d :
+        (theme == "blue" ? #28293d : #e8effc);
 
     // Backward-compatible aliases
     out property <color> background: bg_main;

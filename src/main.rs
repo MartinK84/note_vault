@@ -1157,14 +1157,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let quick_viewer_weak = quick_viewer.as_weak();
 
     // Initialize Theme
-    let is_dark = config.theme == "dark";
+    let theme_name = match config.theme.as_str() {
+        "blue" => "blue",
+        "light" => "light",
+        _ => "dark",
+    };
+    let is_dark = theme_name != "light";
+    main_window.global::<Theme>().set_theme(theme_name.into());
     main_window.global::<Theme>().set_is_dark(is_dark);
+    quick_search.global::<Theme>().set_theme(theme_name.into());
     quick_search.global::<Theme>().set_is_dark(is_dark);
+    quick_viewer.global::<Theme>().set_theme(theme_name.into());
     quick_viewer.global::<Theme>().set_is_dark(is_dark);
-    main_window.set_settings_theme(if is_dark { "dark".into() } else { "light".into() });
+    main_window.set_settings_theme(theme_name.into());
 
     let theme_options_model: slint::ModelRc<slint::SharedString> =
-        std::rc::Rc::new(slint::VecModel::from(vec!["dark".into(), "light".into()])).into();
+        std::rc::Rc::new(slint::VecModel::from(vec!["dark".into(), "blue".into(), "light".into()])).into();
     main_window.set_theme_options(theme_options_model);
 
     // Initialize Settings state
@@ -1829,13 +1837,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cfg = app_config.lock().unwrap();
             let cur_path = vault_path.lock().unwrap().to_string_lossy().to_string();
             let cur_multi = use_multithreading.load(Ordering::Relaxed);
-            let cur_theme = cfg.theme.clone();
             let cur_hotkey = cfg.global_hotkey.clone();
             let cur_minimize = cfg.minimize_to_tray;
-            let is_dark = cur_theme == "dark";
+            let cur_theme_raw = cfg.theme.clone();
+            let cur_theme = match cur_theme_raw.as_str() {
+                "blue" => "blue",
+                "light" => "light",
+                _ => "dark",
+            };
+            let is_dark = cur_theme != "light";
 
             ui.set_settings_vault_path(cur_path.into());
             ui.set_settings_use_multithreading(cur_multi);
+            ui.global::<Theme>().set_theme(cur_theme.into());
             ui.global::<Theme>().set_is_dark(is_dark);
             ui.set_settings_theme(cur_theme.into());
             ui.set_settings_global_hotkey(cur_hotkey.into());
@@ -1888,7 +1902,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let old_hk = cfg.global_hotkey.clone();
                 cfg.vault_path = new_path_clean.clone();
                 cfg.use_multithreading = new_multi;
-                cfg.theme = new_theme_clean.clone();
+                let final_theme = match new_theme_clean.as_str() {
+                    "blue" => "blue",
+                    "light" => "light",
+                    _ => "dark",
+                };
+                cfg.theme = final_theme.to_string();
                 cfg.global_hotkey = clean_hotkey_str.clone();
                 cfg.minimize_to_tray = new_min_tray;
                 if let Err(e) = cfg.save() {
@@ -1916,12 +1935,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_settings_minimize_to_tray(new_min_tray);
 
             // 2. Apply theme dynamically
-            let is_dark_mode = new_theme_clean == "dark";
+            let final_theme = match new_theme_clean.as_str() {
+                "blue" => "blue",
+                "light" => "light",
+                _ => "dark",
+            };
+            let is_dark_mode = final_theme != "light";
+            ui.global::<Theme>().set_theme(final_theme.into());
             ui.global::<Theme>().set_is_dark(is_dark_mode);
             if let Some(qs) = quick_search_weak.upgrade() {
+                qs.global::<Theme>().set_theme(final_theme.into());
                 qs.global::<Theme>().set_is_dark(is_dark_mode);
             }
             if let Some(qv) = quick_viewer_weak.upgrade() {
+                qv.global::<Theme>().set_theme(final_theme.into());
                 qv.global::<Theme>().set_is_dark(is_dark_mode);
             }
 
@@ -1971,14 +1998,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let quick_search_weak = quick_search_weak.clone();
         let quick_viewer_weak = quick_viewer_weak.clone();
         move |theme_str| {
-            let is_dark_mode = theme_str.trim() == "dark";
+            let final_theme = match theme_str.trim() {
+                "blue" => "blue",
+                "light" => "light",
+                _ => "dark",
+            };
+            let is_dark_mode = final_theme != "light";
             if let Some(ui) = window_weak.upgrade() {
+                ui.global::<Theme>().set_theme(final_theme.into());
                 ui.global::<Theme>().set_is_dark(is_dark_mode);
             }
             if let Some(qs) = quick_search_weak.upgrade() {
+                qs.global::<Theme>().set_theme(final_theme.into());
                 qs.global::<Theme>().set_is_dark(is_dark_mode);
             }
             if let Some(qv) = quick_viewer_weak.upgrade() {
+                qv.global::<Theme>().set_theme(final_theme.into());
                 qv.global::<Theme>().set_is_dark(is_dark_mode);
             }
         }

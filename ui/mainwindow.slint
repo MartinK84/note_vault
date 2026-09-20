@@ -122,7 +122,7 @@ export component MainWindow inherits Window {
     in-out property <string> settings_vault_path: "";
     in-out property <bool> settings_use_multithreading: true;
     in-out property <string> settings_theme: "dark";
-    in property <[string]> theme_options: ["dark", "light"];
+    in property <[string]> theme_options: ["dark", "blue", "light"];
     in-out property <string> settings_global_hotkey: "Shift+Space";
     in-out property <bool> settings_minimize_to_tray: true;
     in-out property <string> settings_cur_pwd: "";
@@ -1706,7 +1706,7 @@ export component MainWindow inherits Window {
                                         y: root.current_line_y + 14px;
                                         width: parent.width;
                                         height: (root.editor_font_size * 1.35) * 1px;
-                                        background: Theme.is_dark ? #28293d : #e8effc;
+                                        background: Theme.line_highlight;
                                         border-radius: 2px;
                                     }
 
