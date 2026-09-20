@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -340,23 +340,213 @@ fn activate_quick_search_window() {
 #[cfg(not(target_os = "windows"))]
 fn activate_quick_search_window() {}
 
-/// Restores and focuses the main NoteVault application window on Windows.
 #[cfg(target_os = "windows")]
-fn restore_main_window() {
+static MAIN_WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
+
+#[cfg(target_os = "windows")]
+static MAIN_WINDOW_HIDDEN_TO_TRAY: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct GUID {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+#[cfg(target_os = "windows")]
+const CLSID_TASKBAR_LIST: GUID = GUID {
+    data1: 0x56FDF344,
+    data2: 0xFD6D,
+    data3: 0x11D0,
+    data4: [0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90],
+};
+
+#[cfg(target_os = "windows")]
+const IID_ITASKBAR_LIST: GUID = GUID {
+    data1: 0x56FDF342,
+    data2: 0xFD6D,
+    data3: 0x11D0,
+    data4: [0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90],
+};
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct ITaskbarListVtbl {
+    query_interface: unsafe extern "system" fn(this: *mut ITaskbarList, riid: *const GUID, ppv: *mut *mut std::ffi::c_void) -> i32,
+    add_ref: unsafe extern "system" fn(this: *mut ITaskbarList) -> u32,
+    release: unsafe extern "system" fn(this: *mut ITaskbarList) -> u32,
+    hr_init: unsafe extern "system" fn(this: *mut ITaskbarList) -> i32,
+    add_tab: unsafe extern "system" fn(this: *mut ITaskbarList, hwnd: isize) -> i32,
+    delete_tab: unsafe extern "system" fn(this: *mut ITaskbarList, hwnd: isize) -> i32,
+    activate_tab: unsafe extern "system" fn(this: *mut ITaskbarList, hwnd: isize) -> i32,
+    set_active_alt: unsafe extern "system" fn(this: *mut ITaskbarList, hwnd: isize) -> i32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct ITaskbarList {
+    vtbl: *const ITaskbarListVtbl,
+}
+
+#[cfg(target_os = "windows")]
+fn taskbar_delete_tab(hwnd: isize) {
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(pvReserved: *mut std::ffi::c_void, dwCoInit: u32) -> i32;
+        fn CoCreateInstance(
+            rclsid: *const GUID,
+            pUnkOuter: *mut std::ffi::c_void,
+            dwClsContext: u32,
+            riid: *const GUID,
+            ppv: *mut *mut std::ffi::c_void,
+        ) -> i32;
+    }
+    unsafe {
+        let _ = CoInitializeEx(std::ptr::null_mut(), 0);
+        let mut obj: *mut std::ffi::c_void = std::ptr::null_mut();
+        if CoCreateInstance(
+            &CLSID_TASKBAR_LIST,
+            std::ptr::null_mut(),
+            1, // CLSCTX_INPROC_SERVER
+            &IID_ITASKBAR_LIST,
+            &mut obj,
+        ) == 0 && !obj.is_null() {
+            let taskbar = obj as *mut ITaskbarList;
+            let vtbl = &*(*taskbar).vtbl;
+            let _ = (vtbl.hr_init)(taskbar);
+            let _ = (vtbl.delete_tab)(taskbar, hwnd);
+            let _ = (vtbl.release)(taskbar);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn taskbar_add_tab(hwnd: isize) {
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(pvReserved: *mut std::ffi::c_void, dwCoInit: u32) -> i32;
+        fn CoCreateInstance(
+            rclsid: *const GUID,
+            pUnkOuter: *mut std::ffi::c_void,
+            dwClsContext: u32,
+            riid: *const GUID,
+            ppv: *mut *mut std::ffi::c_void,
+        ) -> i32;
+    }
+    unsafe {
+        let _ = CoInitializeEx(std::ptr::null_mut(), 0);
+        let mut obj: *mut std::ffi::c_void = std::ptr::null_mut();
+        if CoCreateInstance(
+            &CLSID_TASKBAR_LIST,
+            std::ptr::null_mut(),
+            1, // CLSCTX_INPROC_SERVER
+            &IID_ITASKBAR_LIST,
+            &mut obj,
+        ) == 0 && !obj.is_null() {
+            let taskbar = obj as *mut ITaskbarList;
+            let vtbl = &*(*taskbar).vtbl;
+            let _ = (vtbl.hr_init)(taskbar);
+            let _ = (vtbl.add_tab)(taskbar, hwnd);
+            let _ = (vtbl.release)(taskbar);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_main_window_hwnd() -> isize {
+    let cached = MAIN_WINDOW_HWND.load(Ordering::Relaxed);
+    if cached != 0 {
+        return cached;
+    }
     #[link(name = "user32")]
     unsafe extern "system" {
         fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
-        fn SetForegroundWindow(hWnd: isize) -> i32;
-        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+        fn EnumWindows(lpEnumFunc: unsafe extern "system" fn(isize, isize) -> i32, lParam: isize) -> i32;
+        fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
+        fn GetWindowTextW(hWnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
     }
     unsafe {
         let title_wide: Vec<u16> = "NoteVault - Secure Encrypted Notes"
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        let mut hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd == 0 {
+            unsafe extern "system" fn enum_proc(wnd: isize, lparam: isize) -> i32 {
+                let mut pid = 0u32;
+                unsafe {
+                    GetWindowThreadProcessId(wnd, &mut pid);
+                    if pid == std::process::id() {
+                        let mut title_buf = [0u16; 256];
+                        let len = GetWindowTextW(wnd, title_buf.as_mut_ptr(), 256);
+                        let title = String::from_utf16_lossy(&title_buf[..len as usize]);
+                        if title.contains("NoteVault - Secure Encrypted Notes") {
+                            *(lparam as *mut isize) = wnd;
+                            return 0;
+                        }
+                    }
+                }
+                1
+            }
+            let mut found_hwnd: isize = 0;
+            EnumWindows(enum_proc, &mut found_hwnd as *mut isize as isize);
+            hwnd = found_hwnd;
+        }
         if hwnd != 0 {
-            ShowWindow(hwnd, 9); // SW_RESTORE
+            MAIN_WINDOW_HWND.store(hwnd, Ordering::Relaxed);
+        }
+        hwnd
+    }
+}
+
+/// Hides the main window completely from desktop and taskbar on Windows.
+#[cfg(target_os = "windows")]
+fn hide_main_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+        fn GetWindowLongPtrW(hWnd: isize, nIndex: i32) -> isize;
+        fn SetWindowLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+    }
+    unsafe {
+        let hwnd = get_main_window_hwnd();
+        if hwnd != 0 {
+            const GWL_EXSTYLE: i32 = -20;
+            const WS_EX_TOOLWINDOW: isize = 0x00000080;
+            const WS_EX_APPWINDOW: isize = 0x00040000;
+            let cur = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (cur & !WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW);
+            taskbar_delete_tab(hwnd);
+            ShowWindow(hwnd, 0); // 0 = SW_HIDE removes window completely from screen and taskbar
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_main_window() {}
+
+/// Restores and focuses the main NoteVault application window on Windows.
+#[cfg(target_os = "windows")]
+fn restore_main_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetForegroundWindow(hWnd: isize) -> i32;
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+        fn GetWindowLongPtrW(hWnd: isize, nIndex: i32) -> isize;
+        fn SetWindowLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+    }
+    unsafe {
+        let hwnd = get_main_window_hwnd();
+        if hwnd != 0 {
+            const GWL_EXSTYLE: i32 = -20;
+            const WS_EX_TOOLWINDOW: isize = 0x00000080;
+            const WS_EX_APPWINDOW: isize = 0x00040000;
+            let cur = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (cur & !WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW);
+            ShowWindow(hwnd, 9); // 9 = SW_RESTORE restores size, displays on screen and taskbar
+            taskbar_add_tab(hwnd);
             SetForegroundWindow(hwnd);
         }
     }
@@ -888,10 +1078,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Intercept close requests to minimize to system tray if enabled
     main_window.window().on_close_requested({
+        let window_weak = window_weak.clone();
         let app_config = Arc::clone(&app_config);
         move || {
             let minimize = app_config.lock().unwrap().minimize_to_tray;
             if minimize {
+                #[cfg(target_os = "windows")]
+                MAIN_WINDOW_HIDDEN_TO_TRAY.store(true, Ordering::Relaxed);
+                if let Some(ui) = window_weak.upgrade() {
+                    let _ = ui.hide();
+                }
+                #[cfg(target_os = "windows")]
+                hide_main_window();
                 slint::CloseRequestResponse::HideWindow
             } else {
                 let _ = slint::quit_event_loop();
@@ -928,6 +1126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tray_quick_search_weak = quick_search_weak.clone();
     let timer_is_qs_open = Arc::clone(&is_quick_search_open);
     let timer_qs_shown = Arc::clone(&quick_search_shown_at);
+    let timer_app_config = Arc::clone(&app_config);
 
     tray_timer.start(
         slint::TimerMode::Repeated,
@@ -937,6 +1136,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if event.id == show_item_id {
                     if let Some(ui) = tray_window_weak.upgrade() {
                         let _ = ui.show();
+                        #[cfg(target_os = "windows")]
+                        MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
                         restore_main_window();
                     }
                 } else if event.id == quit_item_id {
@@ -949,10 +1150,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     TrayIconEvent::Click { button: MouseButton::Left, .. } => {
                         if let Some(ui) = tray_window_weak.upgrade() {
                             let _ = ui.show();
+                            #[cfg(target_os = "windows")]
+                            MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
                             restore_main_window();
                         }
                     }
                     _ => {}
+                }
+            }
+
+            // Check if main window was minimized by user -> Hide completely from taskbar
+            #[cfg(target_os = "windows")]
+            {
+                let minimize = timer_app_config.lock().unwrap().minimize_to_tray;
+                if minimize {
+                    let is_hidden = MAIN_WINDOW_HIDDEN_TO_TRAY.load(Ordering::Relaxed);
+                    if !is_hidden {
+                        #[link(name = "user32")]
+                        unsafe extern "system" {
+                            fn IsIconic(hWnd: isize) -> i32;
+                        }
+                        let hwnd = get_main_window_hwnd();
+                        if hwnd != 0 {
+                            unsafe {
+                                if IsIconic(hwnd) != 0 {
+                                    MAIN_WINDOW_HIDDEN_TO_TRAY.store(true, Ordering::Relaxed);
+                                    hide_main_window();
+                                    if let Some(ui) = tray_window_weak.upgrade() {
+                                        let _ = ui.hide();
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2623,8 +2853,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tray_icon = tray_icon_handle;
     let _tray_timer = tray_timer;
 
-    // Run Slint GUI event loop
-    main_window.run()?;
+    // Run Slint GUI event loop until explicit quit (persists when windows are hidden to system tray)
+    main_window.show()?;
+    slint::run_event_loop_until_quit()?;
     Ok(())
 }
 
@@ -2804,3 +3035,4 @@ mod tests {
         );
     }
 }
+
