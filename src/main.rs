@@ -102,6 +102,58 @@ fn format_unix_date(ts: i64) -> String {
     format!("{:04}-{:02}-{:02}", year, month, day)
 }
 
+/// Validates a user-supplied folder name to ensure it is valid, safe, and portable across OSes (especially Windows).
+/// Returns `Ok(sanitized_trimmed_name)` or `Err(user_friendly_error_message)`.
+pub fn validate_folder_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Folder name cannot be empty.".to_string());
+    }
+
+    if trimmed.len() > 255 {
+        return Err("Folder name is too long (maximum 255 characters).".to_string());
+    }
+
+    // Disallow path separators and path traversal
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err("Folder name cannot contain path separators ('/' or '\\').".to_string());
+    }
+
+    if trimmed == "." || trimmed == ".." || trimmed.starts_with("../") || trimmed.starts_with("..\\") || trimmed.contains("/..") || trimmed.contains("\\..") {
+        return Err("Folder name cannot contain relative path components ('..').".to_string());
+    }
+
+    // Windows illegal filename characters: < > : " | ? * and ASCII control characters (0-31)
+    const ILLEGAL_CHARS: [char; 7] = ['<', '>', ':', '"', '|', '?', '*'];
+    if trimmed.chars().any(|c| ILLEGAL_CHARS.contains(&c) || c.is_control() || (c as u32) < 32) {
+        return Err("Folder name contains illegal characters (< > : \" | ? * or control characters).".to_string());
+    }
+
+    // Windows prohibits filenames ending with a period
+    if trimmed.ends_with('.') {
+        return Err("Folder name cannot end with a period ('.').".to_string());
+    }
+
+    // NoteVault internal reserved category
+    if trimmed == "*All Notes*" {
+        return Err("'*All Notes*' is a reserved system category name.".to_string());
+    }
+
+    // Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    // Windows rejects these even if an extension is added (e.g., CON.txt)
+    let base_name = trimmed.split('.').next().unwrap_or(trimmed);
+    let upper_base = base_name.to_ascii_uppercase();
+    const RESERVED_NAMES: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED_NAMES.contains(&upper_base.as_str()) {
+        return Err(format!("'{}' is a system reserved device name on Windows.", base_name));
+    }
+
+    Ok(trimmed.to_string())
+}
+
 /// Sanitizes a note title to produce a safe, filesystem-compatible filename.
 /// Replaces illegal characters (`/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, `|`, and control characters) with `_`.
 /// Trims whitespace and leading/trailing dots.
@@ -119,12 +171,14 @@ pub fn sanitize_filename(title: &str, fallback_id: &str) -> String {
     }
 
     // Guard against Windows-reserved filenames (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
-    let upper = trimmed.to_ascii_uppercase();
+    // Check base name before any extension, e.g. CON.txt or prn.json
+    let base = trimmed.split('.').next().unwrap_or(trimmed);
+    let upper_base = base.to_ascii_uppercase();
     const RESERVED_NAMES: &[&str] = &[
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
         "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
-    if RESERVED_NAMES.contains(&upper.as_str()) {
+    if RESERVED_NAMES.contains(&upper_base.as_str()) {
         format!("{}_{}", trimmed, fallback_id)
     } else {
         trimmed.to_string()
@@ -2640,6 +2694,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "new_folder" => {
                     ui.set_new_folder_name("".into());
+                    ui.set_folder_error_message("".into());
                     ui.set_show_folder_modal(true);
                 }
                 "rescan_vault" => {
@@ -2796,6 +2851,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 target_category = "General".to_string();
             }
 
+            let clean_title = title.trim();
+            let title_str = if clean_title.is_empty() {
+                "Untitled Note".to_string()
+            } else {
+                clean_title.to_string()
+            };
+
+            // Check for note title collision in the target folder
+            let has_duplicate = {
+                let store = metadata_store.lock().unwrap();
+                store.iter().any(|(id, meta)| {
+                    id != &active_id
+                        && meta.category == target_category
+                        && meta.title.trim().eq_ignore_ascii_case(&title_str)
+                })
+            };
+
+            if has_duplicate {
+                ui.set_warning_modal_title("Duplicate Note Title".into());
+                ui.set_warning_modal_message(
+                    format!(
+                        "A note titled \"{}\" already exists in folder \"{}\". Please choose a different title to prevent duplicate notes.",
+                        title_str, target_category
+                    )
+                    .into(),
+                );
+                ui.set_show_warning_modal(true);
+                ui.set_vault_status_text("Save blocked: Duplicate note title in folder".into());
+                return;
+            }
+
             let parsed_tags: Vec<String> = ui
                 .get_note_tags()
                 .iter()
@@ -2817,7 +2903,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (mut note, target_path, old_path_to_remove) = if is_new {
                 let new_note = Note::new(
-                    title.to_string(),
+                    title_str.clone(),
                     parsed_tags.clone(),
                     content.to_string(),
                 );
@@ -2852,7 +2938,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let note_to_save = match loaded_note {
                     Some(mut existing) => {
-                        existing.title = title.to_string();
+                        existing.title = title_str.clone();
                         existing.tags = parsed_tags.clone();
                         existing.content = content.to_string();
                         existing.updated_at = now;
@@ -2863,7 +2949,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Uuid::parse_str(&active_id).unwrap_or_else(|_| Uuid::new_v4());
                         Note {
                             id: parsed_uuid,
-                            title: title.to_string(),
+                            title: title_str.clone(),
                             tags: parsed_tags.clone(),
                             content: content.to_string(),
                             created_at: now,
@@ -2897,7 +2983,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 store.insert(
                     saved_id.clone(),
                     NoteMetaSummary {
-                        title: title.to_string(),
+                        title: title_str.clone(),
                         category: target_category.clone(),
                         tags: parsed_tags,
                         date: formatted_date.clone(),
@@ -2914,6 +3000,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             ui.set_active_note_id(saved_id.into());
+            ui.set_note_title(title_str.as_str().into());
             ui.set_note_date(formatted_date.into());
             ui.set_note_category(target_category.clone().into());
             ui.set_has_unsaved_changes(false);
@@ -2981,25 +3068,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if ui.get_is_locked() {
                 return;
             }
-            let name_clean = name.trim();
 
-            if name_clean.is_empty() {
+            let valid_name = match validate_folder_name(&name) {
+                Ok(n) => n,
+                Err(err_msg) => {
+                    ui.set_folder_error_message(err_msg.into());
+                    return;
+                }
+            };
+
+            let current_vault = vault_path.lock().unwrap().clone();
+            let target_dir = current_vault.join(&valid_name);
+
+            if target_dir.exists() {
+                ui.set_folder_error_message(
+                    format!("A folder named '{}' already exists.", valid_name).into(),
+                );
                 return;
             }
 
-            let current_vault = vault_path.lock().unwrap().clone();
-            let target_dir = current_vault.join(name_clean);
-            let full_folder_name = name_clean.to_string();
-
             if let Err(e) = std::fs::create_dir_all(&target_dir) {
+                ui.set_folder_error_message(format!("Failed to create folder: {}", e).into());
                 eprintln!("Failed to create folder at {:?}: {}", target_dir, e);
                 return;
             }
 
+            ui.set_folder_error_message("".into());
+            ui.set_show_folder_modal(false);
+
             println!("[NoteVault] Created folder: {:?}", target_dir);
-            *active_folder.lock().unwrap() = full_folder_name.clone();
-            ui.set_active_folder(full_folder_name.clone().into());
-            ui.set_note_category(full_folder_name.into());
+            *active_folder.lock().unwrap() = valid_name.clone();
+            ui.set_active_folder(valid_name.clone().into());
+            ui.set_note_category(valid_name.into());
 
             refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
         }
@@ -3018,41 +3118,92 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move |old_name, new_name| {
             let Some(ui) = window_weak.upgrade() else { return };
             let old_name = old_name.trim().to_string();
-            let new_name = new_name.trim().to_string();
 
-            if old_name.is_empty() || new_name.is_empty() || old_name == new_name {
+            if old_name.is_empty() {
+                ui.set_show_rename_folder_modal(false);
+                return;
+            }
+
+            let valid_new = match validate_folder_name(&new_name) {
+                Ok(n) => n,
+                Err(err_msg) => {
+                    ui.set_rename_folder_error_message(err_msg.into());
+                    return;
+                }
+            };
+
+            if old_name == valid_new {
+                ui.set_rename_folder_error_message("".into());
+                ui.set_show_rename_folder_modal(false);
                 return;
             }
 
             let current_vault = vault_path.lock().unwrap().clone();
             let old_path = current_vault.join(&old_name);
-            let new_path = current_vault.join(&new_name);
+            let new_path = current_vault.join(&valid_new);
+
+            let is_case_only = old_name.eq_ignore_ascii_case(&valid_new);
+
+            // Collision check: if new_path exists and is not just a case-only rename of the existing directory
+            if new_path.exists() && !is_case_only {
+                ui.set_rename_folder_error_message(
+                    format!("A folder named '{}' already exists.", valid_new).into(),
+                );
+                return;
+            }
 
             if old_path.exists() {
                 if let Some(parent) = new_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                if let Err(e) = std::fs::rename(&old_path, &new_path) {
-                    eprintln!(
-                        "Failed to rename directory from {:?} to {:?}: {}",
-                        old_path, new_path, e
-                    );
-                    return;
+
+                if is_case_only {
+                    // Windows NTFS is case-insensitive. A direct rename to different case can fail.
+                    // Rename via a temporary intermediate directory.
+                    let temp_name = format!("{}_nv_temp_{}", old_name, Uuid::new_v4());
+                    let temp_path = current_vault.join(&temp_name);
+                    if let Err(e) = std::fs::rename(&old_path, &temp_path) {
+                        ui.set_rename_folder_error_message(
+                            format!("Failed to rename folder: {}", e).into(),
+                        );
+                        return;
+                    }
+                    if let Err(e) = std::fs::rename(&temp_path, &new_path) {
+                        let _ = std::fs::rename(&temp_path, &old_path);
+                        ui.set_rename_folder_error_message(
+                            format!("Failed to rename folder: {}", e).into(),
+                        );
+                        return;
+                    }
+                } else {
+                    if let Err(e) = std::fs::rename(&old_path, &new_path) {
+                        ui.set_rename_folder_error_message(
+                            format!("Failed to rename folder: {}", e).into(),
+                        );
+                        eprintln!(
+                            "Failed to rename directory from {:?} to {:?}: {}",
+                            old_path, new_path, e
+                        );
+                        return;
+                    }
                 }
             }
+
+            ui.set_rename_folder_error_message("".into());
+            ui.set_show_rename_folder_modal(false);
 
             // Update notes in metadata store
             {
                 let mut store = metadata_store.lock().unwrap();
                 for meta in store.values_mut() {
                     if meta.category == old_name {
-                        meta.category = new_name.clone();
+                        meta.category = valid_new.clone();
                         if let Ok(rel) = meta.file_path.strip_prefix(&old_path) {
                             meta.file_path = new_path.join(rel);
                         }
                     } else if meta.category.starts_with(&format!("{}/", old_name)) {
                         let sub = &meta.category[old_name.len() + 1..];
-                        meta.category = format!("{}/{}", new_name, sub);
+                        meta.category = format!("{}/{}", valid_new, sub);
                         if let Ok(rel) = meta.file_path.strip_prefix(&old_path) {
                             meta.file_path = new_path.join(rel);
                         }
@@ -3064,22 +3215,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 let mut act = active_folder.lock().unwrap();
                 if *act == old_name {
-                    *act = new_name.clone();
+                    *act = valid_new.clone();
                 } else if act.starts_with(&format!("{}/", old_name)) {
                     let sub = &act[old_name.len() + 1..];
-                    *act = format!("{}/{}", new_name, sub);
+                    *act = format!("{}/{}", valid_new, sub);
                 }
             }
 
             if ui.get_note_category() == old_name {
-                ui.set_note_category(new_name.as_str().into());
+                ui.set_note_category(valid_new.as_str().into());
             }
             if ui.get_active_folder() == old_name {
-                ui.set_active_folder(new_name.as_str().into());
+                ui.set_active_folder(valid_new.as_str().into());
             }
 
             refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
-            println!("[NoteVault] Renamed folder from '{}' to '{}'", old_name, new_name);
+            println!("[NoteVault] Renamed folder from '{}' to '{}'", old_name, valid_new);
         }
     });
 
@@ -3534,6 +3685,57 @@ mod tests {
         assert_eq!(sanitize_filename("prn", "id123"), "prn_id123");
         assert_eq!(sanitize_filename("aux", "id123"), "aux_id123");
         assert_eq!(sanitize_filename("nul", "id123"), "nul_id123");
+        assert_eq!(sanitize_filename("CON.txt", "id123"), "CON.txt_id123");
+        assert_eq!(sanitize_filename("prn.json", "id123"), "prn.json_id123");
+    }
+
+    #[test]
+    fn test_validate_folder_name_valid() {
+        assert_eq!(validate_folder_name("Personal").unwrap(), "Personal");
+        assert_eq!(validate_folder_name("  Work Notes  ").unwrap(), "Work Notes");
+        assert_eq!(validate_folder_name("Project-2026_v2").unwrap(), "Project-2026_v2");
+    }
+
+    #[test]
+    fn test_validate_folder_name_empty_or_too_long() {
+        assert!(validate_folder_name("").is_err());
+        assert!(validate_folder_name("   ").is_err());
+        let long_name = "a".repeat(256);
+        assert!(validate_folder_name(&long_name).is_err());
+    }
+
+    #[test]
+    fn test_validate_folder_name_illegal_chars() {
+        assert!(validate_folder_name("Folder/Sub").is_err());
+        assert!(validate_folder_name("Folder\\Sub").is_err());
+        assert!(validate_folder_name("Folder:Name").is_err());
+        assert!(validate_folder_name("Folder*Name").is_err());
+        assert!(validate_folder_name("Folder?Name").is_err());
+        assert!(validate_folder_name("Folder\"Name").is_err());
+        assert!(validate_folder_name("Folder<Name").is_err());
+        assert!(validate_folder_name("Folder>Name").is_err());
+        assert!(validate_folder_name("Folder|Name").is_err());
+    }
+
+    #[test]
+    fn test_validate_folder_name_traversal_and_trailing() {
+        assert!(validate_folder_name("..").is_err());
+        assert!(validate_folder_name(".").is_err());
+        assert!(validate_folder_name("../Secret").is_err());
+        assert!(validate_folder_name("TrailingPeriod.").is_err());
+    }
+
+    #[test]
+    fn test_validate_folder_name_reserved_device_names() {
+        assert!(validate_folder_name("CON").is_err());
+        assert!(validate_folder_name("con").is_err());
+        assert!(validate_folder_name("PRN").is_err());
+        assert!(validate_folder_name("aux").is_err());
+        assert!(validate_folder_name("NUL").is_err());
+        assert!(validate_folder_name("COM1").is_err());
+        assert!(validate_folder_name("lpt9").is_err());
+        assert!(validate_folder_name("con.txt").is_err());
+        assert!(validate_folder_name("*All Notes*").is_err());
     }
 
     #[test]

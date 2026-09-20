@@ -11,7 +11,8 @@ import {
     MoveNoteModal, 
     AddTagModal,
     WelcomeModal,
-    ExportModal 
+    ExportModal,
+    WarningModal
 } from "modals.slint";
 import { SettingsDialog } from "settings.slint";
 import { QuickSearchWindow, QuickViewerWindow, QuickSearchResult } from "quick_search.slint";
@@ -80,11 +81,18 @@ export component MainWindow inherits Window {
     // --- Folder Creation Modal State ---
     in-out property <bool> show_folder_modal: false;
     in-out property <string> new_folder_name: "";
+    in-out property <string> folder_error_message: "";
 
     // --- Folder Rename Modal State ---
     in-out property <bool> show_rename_folder_modal: false;
     in-out property <string> target_folder_name: "";
     in-out property <string> rename_new_name: "";
+    in-out property <string> rename_folder_error_message: "";
+
+    // --- Warning Modal State ---
+    in-out property <bool> show_warning_modal: false;
+    in-out property <string> warning_modal_title: "Warning";
+    in-out property <string> warning_modal_message: "";
 
     // --- Folder Deletion Modal State ---
     in-out property <bool> show_delete_folder_modal: false;
@@ -471,6 +479,7 @@ export component MainWindow inherits Window {
                                             root.show_unsaved_warning = true;
                                         } else {
                                             root.new_folder_name = "";
+                                            root.folder_error_message = "";
                                             root.show_folder_modal = true;
                                             root.new_folder_requested();
                                         }
@@ -636,6 +645,7 @@ export component MainWindow inherits Window {
                                                     folder_menu.close();
                                                     root.target_folder_name = folder;
                                                     root.rename_new_name = folder;
+                                                    root.rename_folder_error_message = "";
                                                     root.show_rename_folder_modal = true;
                                                 }
                                             }
@@ -1852,9 +1862,12 @@ export component MainWindow inherits Window {
     // ==========================================
     if root.show_folder_modal : FolderModal {
         folder_name <=> root.new_folder_name;
-        cancel => { root.show_folder_modal = false; }
-        create(name) => {
+        error_message: root.folder_error_message;
+        cancel => {
             root.show_folder_modal = false;
+            root.folder_error_message = "";
+        }
+        create(name) => {
             root.create_folder_confirmed(name);
         }
     }
@@ -1862,10 +1875,21 @@ export component MainWindow inherits Window {
     if root.show_rename_folder_modal : RenameFolderModal {
         target_folder_name: root.target_folder_name;
         new_name <=> root.rename_new_name;
-        cancel => { root.show_rename_folder_modal = false; }
-        rename(old_name, new_name) => {
+        error_message: root.rename_folder_error_message;
+        cancel => {
             root.show_rename_folder_modal = false;
+            root.rename_folder_error_message = "";
+        }
+        rename(old_name, new_name) => {
             root.rename_folder_confirmed(old_name, new_name);
+        }
+    }
+
+    if root.show_warning_modal : WarningModal {
+        title: root.warning_modal_title;
+        message: root.warning_modal_message;
+        close => {
+            root.show_warning_modal = false;
         }
     }
 
