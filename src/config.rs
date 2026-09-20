@@ -19,6 +19,22 @@ fn default_minimize_to_tray() -> bool {
     true
 }
 
+fn default_editor_show_line_numbers() -> bool {
+    false
+}
+
+fn default_editor_line_wrap() -> bool {
+    true
+}
+
+fn default_editor_highlight_current_line() -> bool {
+    true
+}
+
+fn default_editor_font_size() -> u32 {
+    14
+}
+
 /// Persistent configuration for NoteVault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -36,6 +52,18 @@ pub struct AppConfig {
 
     #[serde(default = "default_minimize_to_tray")]
     pub minimize_to_tray: bool,
+
+    #[serde(default = "default_editor_show_line_numbers")]
+    pub editor_show_line_numbers: bool,
+
+    #[serde(default = "default_editor_line_wrap")]
+    pub editor_line_wrap: bool,
+
+    #[serde(default = "default_editor_highlight_current_line")]
+    pub editor_highlight_current_line: bool,
+
+    #[serde(default = "default_editor_font_size")]
+    pub editor_font_size: u32,
 }
 
 impl Default for AppConfig {
@@ -46,6 +74,10 @@ impl Default for AppConfig {
             theme: default_theme(),
             global_hotkey: default_global_hotkey(),
             minimize_to_tray: default_minimize_to_tray(),
+            editor_show_line_numbers: default_editor_show_line_numbers(),
+            editor_line_wrap: default_editor_line_wrap(),
+            editor_highlight_current_line: default_editor_highlight_current_line(),
+            editor_font_size: default_editor_font_size(),
         }
     }
 }
@@ -102,6 +134,10 @@ mod tests {
         assert_eq!(config.theme, "dark");
         assert_eq!(config.global_hotkey, "Shift+Space");
         assert!(config.minimize_to_tray);
+        assert!(!config.editor_show_line_numbers);
+        assert!(config.editor_line_wrap);
+        assert!(config.editor_highlight_current_line);
+        assert_eq!(config.editor_font_size, 14);
     }
 
     #[test]
@@ -115,6 +151,10 @@ mod tests {
             theme: "light".to_string(),
             global_hotkey: "Control+Shift+N".to_string(),
             minimize_to_tray: false,
+            editor_show_line_numbers: true,
+            editor_line_wrap: false,
+            editor_highlight_current_line: false,
+            editor_font_size: 18,
         };
 
         config.save_to_path(&config_path).expect("Saving config should succeed");
@@ -141,6 +181,10 @@ mod tests {
         assert_eq!(loaded.theme, "dark");
         assert_eq!(loaded.global_hotkey, "Shift+Space");
         assert!(loaded.minimize_to_tray);
+        assert!(!loaded.editor_show_line_numbers);
+        assert!(loaded.editor_line_wrap);
+        assert!(loaded.editor_highlight_current_line);
+        assert_eq!(loaded.editor_font_size, 14);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
