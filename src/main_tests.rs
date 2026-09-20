@@ -1,0 +1,134 @@
+use super::*;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+#[test]
+fn test_filter_quick_search_results() {
+    let mut store = HashMap::new();
+    for i in 1..=10 {
+        store.insert(
+            format!("note-{}", i),
+            NoteMetaSummary {
+                title: format!("Title {}", i),
+                category: "General".to_string(),
+                tags: if i % 2 == 0 { vec!["even".to_string(), "special".to_string()] } else { vec!["odd".to_string()] },
+                date: "2026-01-01".to_string(),
+                updated_at: i * 100,
+                file_path: PathBuf::from(format!("/vault/note-{}.vault", i)),
+            },
+        );
+    }
+
+    // 1. Empty query should return top 5 sorted by updated_at desc (10, 9, 8, 7, 6)
+    let top5 = filter_quick_search_results("", &store);
+    assert_eq!(top5.len(), 5);
+    assert_eq!(top5[0].title.as_str(), "Title 10");
+    assert_eq!(top5[1].title.as_str(), "Title 9");
+    assert_eq!(top5[2].title.as_str(), "Title 8");
+    assert_eq!(top5[3].title.as_str(), "Title 7");
+    assert_eq!(top5[4].title.as_str(), "Title 6");
+
+    // 2. Query matching by tag
+    let special = filter_quick_search_results("special", &store);
+    assert_eq!(special.len(), 5); // 10, 8, 6, 4, 2
+    assert_eq!(special[0].title.as_str(), "Title 10");
+    assert_eq!(special[1].title.as_str(), "Title 8");
+
+    // 3. Query matching specific title
+    let note3 = filter_quick_search_results("Title 3", &store);
+    assert_eq!(note3.len(), 1);
+    assert_eq!(note3[0].id.as_str(), "note-3");
+
+    // 4. Non-matching query
+    let empty = filter_quick_search_results("nonexistent-search-term", &store);
+    assert_eq!(empty.len(), 0);
+}
+
+#[test]
+fn test_hotkey_manager_reregister() {
+    if let Ok(mgr) = GlobalHotKeyManager::new() {
+        let hk1 = "Control+Alt+F11".parse::<HotKey>().unwrap();
+        let hk2 = "Control+Alt+F12".parse::<HotKey>().unwrap();
+        if mgr.register(hk1).is_ok() {
+            assert!(mgr.unregister(hk1).is_ok());
+        }
+        if mgr.register(hk2).is_ok() {
+            assert!(mgr.unregister(hk2).is_ok());
+        }
+    }
+}
+
+#[test]
+fn test_parse_hotkey_string() {
+    // Standard formats
+    let (hk1, s1) = parse_hotkey_string("Shift+Space").unwrap();
+    assert_eq!(s1, "Shift+Space");
+    assert_eq!(hk1, "Shift+Space".parse::<HotKey>().unwrap());
+
+    // Spaced formats
+    let (_hk2, s2) = parse_hotkey_string("Shift + Space").unwrap();
+    assert_eq!(s2, "Shift+Space");
+
+    // Lowercase and aliases
+    let (_hk3, s3) = parse_hotkey_string("ctrl+shift+space").unwrap();
+    assert_eq!(s3, "Control+Shift+Space");
+
+    let (_hk4, s4) = parse_hotkey_string("control + shift + n").unwrap();
+    assert_eq!(s4, "Control+Shift+N");
+
+    let (_hk5, s5) = parse_hotkey_string("Alt + Space").unwrap();
+    assert_eq!(s5, "Alt+Space");
+
+    // Invalid
+    assert!(parse_hotkey_string("").is_err());
+    assert!(parse_hotkey_string("   ").is_err());
+}
+
+#[test]
+fn test_format_key_combination() {
+    // Shift + Space
+    assert_eq!(
+        format_key_combination(" ", false, false, true, false),
+        Some("Shift+Space".to_string())
+    );
+
+    // Control + Shift + N
+    assert_eq!(
+        format_key_combination("n", true, false, true, false),
+        Some("Control+Shift+N".to_string())
+    );
+
+    // Alt + Space
+    assert_eq!(
+        format_key_combination(" ", false, true, false, false),
+        Some("Alt+Space".to_string())
+    );
+
+    // F12 without modifiers
+    assert_eq!(
+        format_key_combination("F12", false, false, false, false),
+        Some("F12".to_string())
+    );
+
+    // Plain key without modifiers should be rejected for global hotkeys
+    assert_eq!(
+        format_key_combination("a", false, false, false, false),
+        None
+    );
+
+    // Only modifier should be rejected
+    assert_eq!(
+        format_key_combination("\u{0010}", false, false, true, false),
+        None
+    );
+    assert_eq!(
+        format_key_combination("", false, false, true, false),
+        None
+    );
+}
+
+#[test]
+fn test_create_tray_icon_succeeds() {
+    let icon_res = create_tray_icon();
+    assert!(icon_res.is_ok(), "Tray icon creation from logo.svg must succeed");
+}

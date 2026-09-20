@@ -99,6 +99,39 @@ The compiled binaries are placed in `target\release\`:
 .\target\release\note_vault_cli.exe --help
 ```
 
+## Testing
+
+NoteVault features a comprehensive automated test suite covering unit tests, cryptographic cascade verification, validation and sanitization, note export formatting, and end-to-end vault integration workflows.
+
+### Running all tests
+```powershell
+cargo test
+```
+
+### Running specific test suites
+```powershell
+# Core library unit tests (cryptography, cascade AEAD, config, export, validation)
+cargo test --lib
+
+# Desktop GUI binary tests (hotkey parsing, tray icon, search filtering)
+cargo test --bin note_vault
+
+# CLI binary tests (argument parsing, flags, subcommands)
+cargo test --bin note_vault_cli
+
+# Vault integration tests (lifecycle, atomic re-encryption, header resilience)
+cargo test --test vault_integration
+
+# Export and validation integration tests
+cargo test --test export_and_validation
+```
+
+### Running tests with output
+To view console prints or detailed progress logs during test execution:
+```powershell
+cargo test -- --nocapture
+```
+
 ## Creating a Release Archive
 
 A PowerShell script is provided to build the project and package the release binaries into a versioned `.zip` file:

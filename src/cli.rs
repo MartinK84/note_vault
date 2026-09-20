@@ -252,3 +252,7 @@ fn main() -> ExitCode {
 
     ExitCode::SUCCESS
 }
+
+#[cfg(test)]
+#[path = "cli_tests.rs"]
+mod tests;

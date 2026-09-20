@@ -20,6 +20,11 @@ use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 pub mod config;
+pub mod export;
+pub mod validation;
+
+pub use export::*;
+pub use validation::*;
 
 /// Cryptographic binary file header constants.
 pub const CASCADE_VERSION: u8 = 0x02; // Version 2: AES-256-GCM + XChaCha20-Poly1305 cascade
@@ -760,5 +765,203 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_empty_note_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_empty_{}", Uuid::new_v4()));
+        let file_path = temp_dir.join("empty.vault");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let note = Note::new("", Vec::new(), "");
+        let password = "TestPasswordEmpty123!";
+
+        save_note_encrypted(&note, password, None, &file_path).expect("Saving empty note should succeed");
+        let loaded = load_note_decrypted(password, None, &file_path).expect("Loading empty note should succeed");
+
+        assert_eq!(loaded.title, "");
+        assert_eq!(loaded.content, "");
+        assert!(loaded.tags.is_empty());
+        assert_eq!(loaded.id, note.id);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_multilingual_unicode_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_unicode_{}", Uuid::new_v4()));
+        let file_path = temp_dir.join("unicode.vault");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let title = "🦀 Rust & 🔒 Crypto: 日本語テスト & العربية & Übergrößenträger";
+        let tags = vec![
+            "🏷️_tag1".to_string(),
+            "кириллица".to_string(),
+            "emoji_🎉".to_string(),
+        ];
+        let content = "Mathematics: ∑_{i=1}^n x_i = ∫_0^∞ f(t) dt\nSymbols: ⚡ 🚀 💻 🛡️\nMultibyte: 𠜎 𠜱 𠝹 𠱓";
+
+        let note = Note::new(title, tags.clone(), content);
+        let password = "UnicodePassword🔑_Über123!";
+
+        save_note_encrypted(&note, password, None, &file_path).expect("Saving unicode note should succeed");
+        let loaded = load_note_decrypted(password, None, &file_path).expect("Loading unicode note should succeed");
+
+        assert_eq!(loaded.title, title);
+        assert_eq!(loaded.tags, tags);
+        assert_eq!(loaded.content, content);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_large_payload_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_large_{}", Uuid::new_v4()));
+        let file_path = temp_dir.join("large.vault");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // 200 KB repetitive payload with newlines and structure
+        let mut large_content = String::with_capacity(200 * 1024);
+        for i in 0..5000 {
+            large_content.push_str(&format!("Line {}: NoteVault cryptographic cascade payload stress test block.\n", i));
+        }
+
+        let note = Note::new("Large Payload Note", vec!["stress".into(), "large".into()], &large_content);
+        let password = "LargePayloadPassword999#";
+
+        save_note_encrypted(&note, password, None, &file_path).expect("Saving large note should succeed");
+        let loaded = load_note_decrypted(password, None, &file_path).expect("Loading large note should succeed");
+
+        assert_eq!(loaded.content.len(), large_content.len());
+        assert_eq!(loaded.content, large_content);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_corrupt_or_truncated_file_handling() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_trunc_{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let password = "AnyPassword123!";
+
+        // 1. Completely empty file (0 bytes)
+        let empty_path = temp_dir.join("empty.vault");
+        fs::write(&empty_path, b"").unwrap();
+        let empty_res = load_note_decrypted(password, None, &empty_path);
+        assert!(empty_res.is_err(), "Empty file must return error");
+
+        // 2. Short header (10 bytes)
+        let short_path = temp_dir.join("short.vault");
+        fs::write(&short_path, &[CASCADE_VERSION; 10]).unwrap();
+        let short_res = load_note_decrypted(password, None, &short_path);
+        assert!(short_res.is_err(), "File shorter than cascade header must return error");
+
+        // 3. Partial header (50 bytes - less than 69 bytes CASCADE_HEADER_LEN)
+        let partial_path = temp_dir.join("partial.vault");
+        let mut partial_data = vec![0u8; 50];
+        partial_data[0] = CASCADE_VERSION;
+        fs::write(&partial_path, &partial_data).unwrap();
+        let partial_res = load_note_decrypted(password, None, &partial_path);
+        assert!(partial_res.is_err(), "File shorter than 69 bytes must return error");
+
+        // 4. Invalid version byte
+        let invalid_ver_path = temp_dir.join("invalid_ver.vault");
+        let inv_data = vec![0x99u8; 100];
+        fs::write(&invalid_ver_path, &inv_data).unwrap();
+        let inv_res = load_note_decrypted(password, None, &invalid_ver_path);
+        assert!(inv_res.is_err(), "File with unknown version byte must fail gracefully");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_inner_aes_tampering_detected() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_tamper_{}", Uuid::new_v4()));
+        let file_path = temp_dir.join("tamper_inner.vault");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let note = Note::new("Tamper Inner Test", Vec::new(), "Super Secret Payload");
+        let password = "CascadeTamperPassword!";
+
+        save_note_encrypted(&note, password, None, &file_path).unwrap();
+
+        let mut data = fs::read(&file_path).unwrap();
+        // The data layout is: [1B Version] [32B Salt] [12B AES Nonce] [24B ChaCha Nonce] [Outer XChaCha Ciphertext...]
+        // Tampering with byte in the middle of outer ciphertext
+        let mid_idx = CASCADE_HEADER_LEN + (data.len() - CASCADE_HEADER_LEN) / 2;
+        data[mid_idx] ^= 0xFF;
+        fs::write(&file_path, &data).unwrap();
+
+        let result = load_note_decrypted(password, None, &file_path);
+        assert!(result.is_err(), "Tampered ciphertext must be detected by AEAD MAC verification");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_atomic_reencryption_rollback_on_corrupt_file() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_atomic_fail_{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let password = "OriginalPassword123!";
+        let new_password = "NewPassword456!";
+
+        // Create 2 valid notes
+        let note1 = Note::new("Note 1", Vec::new(), "Content 1");
+        let note2 = Note::new("Note 2", Vec::new(), "Content 2");
+        let path1 = temp_dir.join("note1.vault");
+        let path2 = temp_dir.join("note2.vault");
+        save_note_encrypted(&note1, password, None, &path1).unwrap();
+        save_note_encrypted(&note2, password, None, &path2).unwrap();
+
+        // Create 1 corrupted note file
+        let corrupt_path = temp_dir.join("corrupt.vault");
+        fs::write(&corrupt_path, b"corrupted garbage bytes").unwrap();
+
+        // Attempt atomic re-encryption
+        let result = reencrypt_vault_atomic(
+            &temp_dir,
+            password,
+            None,
+            new_password,
+            None,
+            |_, _| {},
+        );
+
+        // Must return Err because corrupt note cannot be decrypted
+        assert!(result.is_err(), "Atomic re-encryption must abort if a file cannot be decrypted");
+
+        // Verify staging files (.vault.new) are cleaned up
+        assert!(!temp_dir.join("note1.vault.new").exists());
+        assert!(!temp_dir.join("note2.vault.new").exists());
+        assert!(!temp_dir.join("corrupt.vault.new").exists());
+
+        // Verify original notes are intact and still decryptable with the original password
+        let loaded1 = load_note_decrypted(password, None, &path1).expect("Original note 1 must still be intact");
+        assert_eq!(loaded1.title, "Note 1");
+        let loaded2 = load_note_decrypted(password, None, &path2).expect("Original note 2 must still be intact");
+        assert_eq!(loaded2.title, "Note 2");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_note_zeroize_memory_hygiene() {
+        let mut note = Note::new("Secret Document", vec!["financial".into()], "Account balance: $1,000,000");
+        let original_id = note.id;
+        assert_ne!(original_id, Uuid::nil());
+        assert!(!note.title.is_empty());
+        assert!(!note.content.is_empty());
+        assert!(!note.tags.is_empty());
+
+        note.zeroize();
+
+        assert_eq!(note.id, Uuid::nil());
+        assert!(note.title.is_empty());
+        assert!(note.content.is_empty());
+        assert!(note.tags.is_empty());
+        assert_eq!(note.created_at, 0);
+        assert_eq!(note.updated_at, 0);
+    }
 }
+
 
