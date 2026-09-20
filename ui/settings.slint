@@ -17,6 +17,9 @@ export component SettingsDialog inherits Rectangle {
     in-out property <bool> use_multithreading: true;
     in-out property <string> theme: "dark";
     in property <[string]> theme_options: ["dark", "light"];
+    in-out property <string> global_hotkey: "Shift+Space";
+    in-out property <bool> minimize_to_tray: true;
+    in-out property <bool> is_recording_hotkey: false;
 
     // Password Change Properties
     in-out property <string> current_password: "";
@@ -29,9 +32,10 @@ export component SettingsDialog inherits Rectangle {
 
     // Callbacks
     callback browse_path_clicked();
-    callback save_settings(string, bool, string);
+    callback save_settings(string, bool, string, string, bool);
     callback change_password(string, string, string);
     callback theme_changed(string);
+    callback record_key_event(string, bool, bool, bool, bool) -> string;
     callback close_clicked();
 
     TouchArea {}
@@ -40,7 +44,7 @@ export component SettingsDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 700px;
-        height: root.is_reencrypting ? 430px : 395px;
+        height: root.is_reencrypting ? 560px : 510px;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
@@ -133,13 +137,133 @@ export component SettingsDialog inherits Rectangle {
                 }
             }
 
-            // Section 2: Preferences (Decryption & Theme)
+            // Section 2: Preferences (Decryption, Tray, Hotkey & Theme)
             VerticalLayout {
                 spacing: 10px;
 
                 CheckBox {
                     text: "Use multi-core decryption";
                     checked <=> root.use_multithreading;
+                }
+
+                CheckBox {
+                    text: "Minimize to tray on close";
+                    checked <=> root.minimize_to_tray;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        text: "Global Hotkey:";
+                        font-size: 13px;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
+
+                    record_scope := FocusScope {
+                        horizontal-stretch: 1;
+                        height: 32px;
+
+                        key-pressed(event) => {
+                            if root.is_recording_hotkey {
+                                if event.text == Key.Escape {
+                                    root.is_recording_hotkey = false;
+                                    return accept;
+                                }
+                                let detected = root.record_key_event(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
+                                if detected != "" {
+                                    root.global_hotkey = detected;
+                                    root.is_recording_hotkey = false;
+                                }
+                                return accept;
+                            }
+                            reject
+                        }
+
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            background: root.is_recording_hotkey ? Theme.bg_active : Theme.bg_secondary;
+                            border-radius: 6px;
+                            border-width: 1.5px;
+                            border-color: root.is_recording_hotkey ? Theme.accent : Theme.border;
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                cross-axis-alignment: center;
+
+                                Image {
+                                    source: @image-url("../assets/icons/search.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.is_recording_hotkey ? Theme.accent : Theme.text_secondary;
+                                }
+
+                                Text {
+                                    text: root.is_recording_hotkey ? "Press shortcut on keyboard (e.g. Shift+Space)..." : root.global_hotkey;
+                                    font-size: 13px;
+                                    font-weight: root.is_recording_hotkey ? 600 : 700;
+                                    color: root.is_recording_hotkey ? Theme.accent : Theme.text_primary;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+
+                                if !root.is_recording_hotkey : Rectangle {
+                                    width: 65px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: Theme.hover;
+
+                                    Text {
+                                        text: "Record";
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if root.is_recording_hotkey : Rectangle {
+                                    width: 60px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: Theme.danger;
+
+                                    Text {
+                                        text: "Cancel";
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: Colors.white;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.is_recording_hotkey = !root.is_recording_hotkey;
+                                    if root.is_recording_hotkey {
+                                        record_scope.focus();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "Reset";
+                        clicked => {
+                            root.global_hotkey = "Shift+Space";
+                            root.is_recording_hotkey = false;
+                        }
+                    }
                 }
 
                 HorizontalLayout {
@@ -307,7 +431,7 @@ export component SettingsDialog inherits Rectangle {
                     text: "Save Settings";
                     primary: true;
                     clicked => {
-                        root.save_settings(root.vault_path, root.use_multithreading, root.theme);
+                        root.save_settings(root.vault_path, root.use_multithreading, root.theme, root.global_hotkey, root.minimize_to_tray);
                     }
                 }
             }

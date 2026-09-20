@@ -1,0 +1,450 @@
+import { LineEdit, TextEdit, Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export struct QuickSearchResult {
+    id: string,
+    title: string,
+    tags: string,
+    category: string,
+}
+
+export component QuickSearchWindow inherits Window {
+    title: "NoteVault Quick Search";
+    no-frame: true;
+    width: 650px;
+    preferred-width: 650px;
+    preferred-height: 360px;
+    background: Colors.transparent;
+    default-font-family: "Segoe UI, Inter, sans-serif";
+
+    in-out property <int> selected_index: 0;
+    in-out property <string> search_text: "";
+    in property <[QuickSearchResult]> results: [];
+
+    callback search_changed(string);
+    callback action_enter_pressed(string);
+    callback action_alt_pressed(string);
+    callback action_space_pressed(string);
+    callback close_requested();
+
+    public function focus_search() {
+        search_input.focus();
+    }
+
+    init => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+        search_input.focus();
+    }
+
+    property <bool> is_dark: Theme.is_dark;
+    changed is_dark => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    fs := FocusScope {
+        width: 100%;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close_requested();
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                if root.results.length > 0 {
+                    root.selected_index = max(0, root.selected_index - 1);
+                }
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                if root.results.length > 0 {
+                    root.selected_index = min(root.results.length - 1, root.selected_index + 1);
+                }
+                return accept;
+            }
+            if event.text == Key.Return {
+                if root.results.length > 0 && root.selected_index >= 0 && root.selected_index < root.results.length {
+                    root.action_enter_pressed(root.results[root.selected_index].id);
+                }
+                return accept;
+            }
+            if event.text == Key.Alt || (!event.modifiers.control && event.modifiers.alt) {
+                if root.results.length > 0 && root.selected_index >= 0 && root.selected_index < root.results.length {
+                    root.action_alt_pressed(root.results[root.selected_index].id);
+                }
+                return accept;
+            }
+            reject
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close_requested();
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                if root.results.length > 0 {
+                    root.selected_index = max(0, root.selected_index - 1);
+                }
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                if root.results.length > 0 {
+                    root.selected_index = min(root.results.length - 1, root.selected_index + 1);
+                }
+                return accept;
+            }
+            if event.text == Key.Return {
+                if root.results.length > 0 && root.selected_index >= 0 && root.selected_index < root.results.length {
+                    root.action_enter_pressed(root.results[root.selected_index].id);
+                }
+                return accept;
+            }
+            if event.text == Key.Alt || (!event.modifiers.control && event.modifiers.alt) {
+                if root.results.length > 0 && root.selected_index >= 0 && root.selected_index < root.results.length {
+                    root.action_alt_pressed(root.results[root.selected_index].id);
+                }
+                return accept;
+            }
+            reject
+        }
+
+        Rectangle {
+            width: 100%;
+            background: Theme.bg_surface;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border_active;
+            clip: true;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                // Search Header Bar
+                HorizontalLayout {
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        source: @image-url("../assets/icons/search.svg");
+                        width: 20px;
+                        height: 20px;
+                        colorize: Theme.accent;
+                    }
+
+                    search_input := LineEdit {
+                        text <=> root.search_text;
+                        placeholder-text: "Search notes by title or tags... (Enter to copy, Alt to view, Esc to close)";
+                        font-size: 14px;
+                        horizontal-stretch: 1;
+
+                        edited(text) => {
+                            root.search_changed(text);
+                        }
+
+                        accepted => {
+                            if root.results.length > 0 && root.selected_index >= 0 && root.selected_index < root.results.length {
+                                root.action_enter_pressed(root.results[root.selected_index].id);
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 26px;
+                        height: 26px;
+                        border-radius: 6px;
+                        background: close_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                        close_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.close_requested();
+                            }
+                        }
+
+                        Image {
+                            source: @image-url("../assets/icons/x.svg");
+                            width: 14px;
+                            height: 14px;
+                            colorize: close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                }
+
+                // Results list (Maximum 5 items)
+                if root.results.length == 0 : Rectangle {
+                    height: 70px;
+                    Text {
+                        text: "No matching notes found";
+                        font-size: 13px;
+                        color: Theme.text_muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.results.length > 0 : VerticalLayout {
+                    spacing: 4px;
+
+                    for result[idx] in root.results : Rectangle {
+                        height: 46px;
+                        border-radius: 8px;
+                        background: idx == root.selected_index ? Theme.bg_active : (item_touch.has-hover ? Theme.hover : Colors.transparent);
+
+                        item_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.selected_index = idx;
+                                root.action_enter_pressed(result.id);
+                            }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+                            cross-axis-alignment: center;
+
+                            Image {
+                                source: @image-url("../assets/icons/file.svg");
+                                width: 16px;
+                                height: 16px;
+                                colorize: idx == root.selected_index ? Theme.accent : Theme.text_secondary;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                alignment: center;
+
+                                Text {
+                                    text: result.title;
+                                    font-size: 13px;
+                                    font-weight: idx == root.selected_index ? 700 : 500;
+                                    color: Theme.text_primary;
+                                    overflow: elide;
+                                }
+
+                                if result.tags != "" : Text {
+                                    text: result.tags;
+                                    font-size: 11px;
+                                    color: Theme.text_muted;
+                                    overflow: elide;
+                                }
+                            }
+
+                            if result.category != "" : Rectangle {
+                                background: Theme.bg_secondary;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                height: 20px;
+
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+
+                                    Text {
+                                        text: result.category;
+                                        font-size: 10px;
+                                        color: Theme.text_secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                border-radius: 4px;
+                                background: view_touch.has-hover ? Theme.accent : Colors.transparent;
+
+                                view_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.selected_index = idx;
+                                        root.action_alt_pressed(result.id);
+                                    }
+                                }
+
+                                Image {
+                                    source: @image-url("../assets/icons/edit.svg");
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: view_touch.has-hover ? Theme.accent_text : Theme.text_muted;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Spacer to ensure bottom hotkey hint stays anchored at the bottom
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                }
+
+                // Keyboard Shortcuts Footer
+                HorizontalLayout {
+                    height: 24px;
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    padding-top: 2px;
+                    padding-bottom: 2px;
+                    alignment: center;
+
+                    Text {
+                        text: "↑↓ Navigate  •  Enter Copy to Clipboard  •  Alt View Note  •  Esc Close";
+                        font-size: 11px;
+                        color: Theme.text_muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component QuickViewerWindow inherits Window {
+    title: root.note_title != "" ? root.note_title + " - NoteVault Quick Viewer" : "NoteVault Quick Viewer";
+    preferred-width: 960px;
+    preferred-height: 680px;
+    min-width: 600px;
+    min-height: 450px;
+    background: Theme.bg_main;
+    default-font-family: "Segoe UI, Inter, sans-serif";
+
+    in-out property <string> note_title: "";
+    in-out property <string> content: "";
+
+    callback close_requested();
+
+    public function clear_data() {
+        root.note_title = "";
+        root.content = "";
+    }
+
+    init => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    property <bool> is_dark: Theme.is_dark;
+    changed is_dark => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    FocusScope {
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.clear_data();
+                root.close_requested();
+                return accept;
+            }
+            reject
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.clear_data();
+                root.close_requested();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            // Header Bar
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/file.svg");
+                    width: 20px;
+                    height: 20px;
+                    colorize: Theme.accent;
+                }
+
+                Text {
+                    text: root.note_title != "" ? root.note_title : "Note Preview";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text_primary;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 6px;
+                    background: viewer_close_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                    viewer_close_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.clear_data();
+                            root.close_requested();
+                        }
+                    }
+
+                    Image {
+                        source: @image-url("../assets/icons/x.svg");
+                        width: 14px;
+                        height: 14px;
+                        colorize: viewer_close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            // Read-only text content
+            TextEdit {
+                text: root.content;
+                read-only: true;
+                font-size: 13px;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            // Footer
+            HorizontalLayout {
+                alignment: end;
+                Text {
+                    text: "Read-only preview  •  Press Esc to close";
+                    font-size: 11px;
+                    color: Theme.text_muted;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

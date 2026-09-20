@@ -5,11 +5,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use arboard::Clipboard;
 use clap::Parser;
+use global_hotkey::hotkey::HotKey;
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use note_vault::config::AppConfig;
 use note_vault::{load_note_decrypted, save_note_encrypted, Note};
 use rayon::prelude::*;
 use slint::Model;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::{Icon, MouseButton, TrayIconBuilder, TrayIconEvent};
 use uuid::Uuid;
 use walkdir::WalkDir;
 use zeroize::{Zeroize, Zeroizing};
@@ -138,6 +143,332 @@ pub fn format_markdown_export(note: &Note, category: &str, date_str: &str) -> St
         title_escaped, category_escaped, tags_array, date_escaped, note.content
     )
 }
+
+/// Builds a 32x32 RGBA icon for the system tray matching NoteVault branding.
+fn create_tray_icon() -> Result<Icon, Box<dyn std::error::Error>> {
+    let width = 32;
+    let height = 32;
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let dx = (x as i32) - 16;
+            let dy = (y as i32) - 16;
+            let dist_sq = dx * dx + dy * dy;
+            // Draw a circular vault emblem with Catppuccin accent (#89b4fa) and dark surface (#181825)
+            if dist_sq <= 14 * 14 {
+                if (x >= 12 && x <= 20 && y >= 10 && y <= 22)
+                    && (x < 14 || x > 18 || y < 14 || y > 18)
+                {
+                    // Inner keyhole / lock motif
+                    rgba.extend_from_slice(&[24, 24, 37, 255]); // #181825
+                } else {
+                    rgba.extend_from_slice(&[137, 180, 250, 255]); // #89b4fa
+                }
+            } else {
+                rgba.extend_from_slice(&[0, 0, 0, 0]); // transparent
+            }
+        }
+    }
+    Icon::from_rgba(rgba, width as u32, height as u32)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+}
+
+/// Filters notes in `metadata_store` by query (matching Title or Tags only),
+/// sorts by `updated_at` descending (newest first), and returns a maximum of 5 items.
+fn filter_quick_search_results(
+    query: &str,
+    metadata_store: &HashMap<String, NoteMetaSummary>,
+) -> Vec<QuickSearchResult> {
+    let q = query.trim().to_lowercase();
+    let mut matching_notes: Vec<(&String, &NoteMetaSummary)> = metadata_store
+        .iter()
+        .filter(|(_id, meta)| {
+            if q.is_empty() {
+                true
+            } else {
+                meta.title.to_lowercase().contains(&q)
+                    || meta.tags.iter().any(|t| t.to_lowercase().contains(&q))
+            }
+        })
+        .collect();
+
+    // Sort by date (updated_at) descending (newest first)
+    matching_notes.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
+
+    // Take top 5 results
+    matching_notes
+        .into_iter()
+        .take(5)
+        .map(|(id, meta)| QuickSearchResult {
+            id: id.clone().into(),
+            title: meta.title.clone().into(),
+            tags: meta.tags.join(", ").into(),
+            category: meta.category.clone().into(),
+        })
+        .collect()
+}
+
+/// Parses and normalizes a global hotkey string (e.g. "Shift + Space", "ctrl+shift+k", "Alt+Space").
+pub fn parse_hotkey_string(s: &str) -> Result<(HotKey, String), String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err("Hotkey cannot be empty".to_string());
+    }
+
+    // Split on '+' and normalize components
+    let parts: Vec<&str> = trimmed.split('+').map(|p| p.trim()).collect();
+    if parts.is_empty() {
+        return Err("Invalid hotkey format".to_string());
+    }
+
+    let mut normalized_parts: Vec<String> = Vec::new();
+    for part in parts {
+        let p_lower = part.to_lowercase();
+        let norm = match p_lower.as_str() {
+            "ctrl" | "control" => "Control".to_string(),
+            "shift" => "Shift".to_string(),
+            "alt" => "Alt".to_string(),
+            "super" | "win" | "windows" => "Super".to_string(),
+            "cmd" | "command" => "Command".to_string(),
+            "cmdorctrl" | "commandorcontrol" => "CmdOrCtrl".to_string(),
+            "space" => "Space".to_string(),
+            "enter" | "return" => "Return".to_string(),
+            "esc" | "escape" => "Escape".to_string(),
+            "tab" => "Tab".to_string(),
+            "backspace" => "Backspace".to_string(),
+            _ => {
+                if part.len() == 1 {
+                    part.to_ascii_uppercase()
+                } else {
+                    let mut c = part.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                }
+            }
+        };
+        normalized_parts.push(norm);
+    }
+
+    let normalized_str = normalized_parts.join("+");
+    match normalized_str.parse::<HotKey>() {
+        Ok(hk) => Ok((hk, normalized_str)),
+        Err(e) => {
+            match trimmed.parse::<HotKey>() {
+                Ok(hk) => Ok((hk, trimmed.to_string())),
+                Err(_) => Err(format!("Could not parse hotkey '{}': {}", trimmed, e)),
+            }
+        }
+    }
+}
+
+/// Retrieves primary screen dimensions (width, height) in physical pixels.
+#[cfg(target_os = "windows")]
+fn get_primary_screen_size() -> (f32, f32) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetSystemMetrics(nIndex: i32) -> i32;
+    }
+    unsafe {
+        let w = GetSystemMetrics(0); // SM_CXSCREEN
+        let h = GetSystemMetrics(1); // SM_CYSCREEN
+        if w > 0 && h > 0 {
+            (w as f32, h as f32)
+        } else {
+            (1920.0, 1080.0)
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_primary_screen_size() -> (f32, f32) {
+    (1920.0, 1080.0)
+}
+
+/// Checks if the QuickSearchWindow currently has the foreground focus.
+#[cfg(target_os = "windows")]
+fn is_quick_search_active() -> bool {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetForegroundWindow() -> isize;
+        fn GetWindowTextW(hWnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
+    }
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd == 0 {
+            return false;
+        }
+        let mut buf = [0u16; 256];
+        let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 256);
+        if len > 0 {
+            let title = String::from_utf16_lossy(&buf[..len as usize]);
+            title.contains("NoteVault Quick Search")
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_quick_search_active() -> bool {
+    true
+}
+
+/// Activates and focuses the QuickSearchWindow on Windows.
+#[cfg(target_os = "windows")]
+fn activate_quick_search_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        fn SetForegroundWindow(hWnd: isize) -> i32;
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+    }
+    unsafe {
+        let title_wide: Vec<u16> = "NoteVault Quick Search"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd != 0 {
+            ShowWindow(hwnd, 5); // SW_SHOW
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn activate_quick_search_window() {}
+
+/// Restores and focuses the main NoteVault application window on Windows.
+#[cfg(target_os = "windows")]
+fn restore_main_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        fn SetForegroundWindow(hWnd: isize) -> i32;
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+    }
+    unsafe {
+        let title_wide: Vec<u16> = "NoteVault - Secure Encrypted Notes"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd != 0 {
+            ShowWindow(hwnd, 9); // SW_RESTORE
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn restore_main_window() {}
+
+/// Activates and brings the QuickViewerWindow to the foreground on Windows.
+#[cfg(target_os = "windows")]
+fn activate_quick_viewer_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        fn SetForegroundWindow(hWnd: isize) -> i32;
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+    }
+    unsafe {
+        let title_wide: Vec<u16> = "NoteVault Quick Viewer"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd != 0 {
+            ShowWindow(hwnd, 5); // SW_SHOW
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn activate_quick_viewer_window() {}
+
+/// Formats a pressed key and active modifiers into a normalized hotkey string.
+/// Returns Some("Shift+Space"), Some("Control+Shift+N"), etc. if valid; None if incomplete or only modifiers.
+pub fn format_key_combination(
+    key_text: &str,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+) -> Option<String> {
+    if key_text.is_empty() {
+        return None;
+    }
+
+    // Ignore if only a modifier key was pressed
+    let is_modifier_key = key_text.chars().any(|c| {
+        c == '\u{0010}' || c == '\u{0011}' || c == '\u{0012}' || c == '\u{0013}' || c == '\u{0014}'
+    });
+    if is_modifier_key {
+        return None;
+    }
+
+    // Determine the key name
+    let key_name = if key_text == " " || key_text == "\u{0020}" {
+        "Space"
+    } else if key_text == "\n" || key_text == "\r" {
+        "Return"
+    } else if key_text == "\t" {
+        "Tab"
+    } else if key_text == "\u{001b}" {
+        "Escape"
+    } else if key_text == "\u{0008}" || key_text == "\u{007f}" {
+        "Backspace"
+    } else if key_text.len() == 1 {
+        let c = key_text.chars().next().unwrap();
+        if c.is_alphabetic() {
+            let s = c.to_ascii_uppercase().to_string();
+            return build_combo(ctrl, alt, shift, meta, &s);
+        } else {
+            return build_combo(ctrl, alt, shift, meta, key_text);
+        }
+    } else {
+        key_text
+    };
+
+    build_combo(ctrl, alt, shift, meta, key_name)
+}
+
+fn build_combo(ctrl: bool, alt: bool, shift: bool, meta: bool, key_name: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    if ctrl {
+        parts.push("Control");
+    }
+    if alt {
+        parts.push("Alt");
+    }
+    if shift {
+        parts.push("Shift");
+    }
+    if meta {
+        parts.push("Super");
+    }
+
+    // Require at least one modifier unless it's a function key (F1-F12)
+    let is_fkey = key_name.starts_with('F')
+        && key_name.len() <= 3
+        && key_name[1..].chars().all(|c| c.is_ascii_digit());
+    if parts.is_empty() && !is_fkey {
+        return None;
+    }
+
+    parts.push(key_name);
+    let combo = parts.join("+");
+    if parse_hotkey_string(&combo).is_ok() {
+        Some(combo)
+    } else {
+        None
+    }
+}
+
 
 /// Re-builds and updates the Slint `folders`, `available_categories`, and `current_notes` models
 /// for the active 3-pane layout, filtering by `active_folder` and `search_query`.
@@ -528,14 +859,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("General".to_string()));
     let search_query: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
-    // Slint Window
+    // Slint Windows: Main, QuickSearch, QuickViewer
     let main_window = MainWindow::new()?;
     main_window.window().set_size(slint::LogicalSize::new(1534.0, 740.0));
     let window_weak = main_window.as_weak();
 
+    let quick_search = QuickSearchWindow::new()?;
+    let quick_viewer = QuickViewerWindow::new()?;
+    let quick_search_weak = quick_search.as_weak();
+    let quick_viewer_weak = quick_viewer.as_weak();
+
     // Initialize Theme
     let is_dark = config.theme == "dark";
     main_window.global::<Theme>().set_is_dark(is_dark);
+    quick_search.global::<Theme>().set_is_dark(is_dark);
+    quick_viewer.global::<Theme>().set_is_dark(is_dark);
     main_window.set_settings_theme(if is_dark { "dark".into() } else { "light".into() });
 
     let theme_options_model: slint::ModelRc<slint::SharedString> =
@@ -545,6 +883,327 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize Settings state
     main_window.set_settings_vault_path(initial_vault_path_str.as_str().into());
     main_window.set_settings_use_multithreading(config.use_multithreading);
+    main_window.set_settings_global_hotkey(config.global_hotkey.as_str().into());
+    main_window.set_settings_minimize_to_tray(config.minimize_to_tray);
+
+    // Intercept close requests to minimize to system tray if enabled
+    main_window.window().on_close_requested({
+        let app_config = Arc::clone(&app_config);
+        move || {
+            let minimize = app_config.lock().unwrap().minimize_to_tray;
+            if minimize {
+                slint::CloseRequestResponse::HideWindow
+            } else {
+                let _ = slint::quit_event_loop();
+                std::process::exit(0);
+            }
+        }
+    });
+
+    // Initialize System Tray
+    let tray_menu = Menu::new();
+    let show_item = MenuItem::new("Show NoteVault", true, None);
+    let quit_item = MenuItem::new("Quit", true, None);
+    let _ = tray_menu.append(&show_item);
+    let _ = tray_menu.append(&PredefinedMenuItem::separator());
+    let _ = tray_menu.append(&quit_item);
+
+    let show_item_id = show_item.id().clone();
+    let quit_item_id = quit_item.id().clone();
+
+    let tray_icon_handle = create_tray_icon().ok().and_then(|icon| {
+        TrayIconBuilder::new()
+            .with_menu(Box::new(tray_menu))
+            .with_tooltip("NoteVault - Encrypted Notes")
+            .with_icon(icon)
+            .build()
+            .ok()
+    });
+
+    let is_quick_search_open = Arc::new(AtomicBool::new(false));
+    let quick_search_shown_at = Arc::new(Mutex::new(std::time::Instant::now()));
+
+    let tray_timer = slint::Timer::default();
+    let tray_window_weak = window_weak.clone();
+    let tray_quick_search_weak = quick_search_weak.clone();
+    let timer_is_qs_open = Arc::clone(&is_quick_search_open);
+    let timer_qs_shown = Arc::clone(&quick_search_shown_at);
+
+    tray_timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(50),
+        move || {
+            while let Ok(event) = MenuEvent::receiver().try_recv() {
+                if event.id == show_item_id {
+                    if let Some(ui) = tray_window_weak.upgrade() {
+                        let _ = ui.show();
+                        restore_main_window();
+                    }
+                } else if event.id == quit_item_id {
+                    let _ = slint::quit_event_loop();
+                    std::process::exit(0);
+                }
+            }
+            while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+                match event {
+                    TrayIconEvent::Click { button: MouseButton::Left, .. } => {
+                        if let Some(ui) = tray_window_weak.upgrade() {
+                            let _ = ui.show();
+                            restore_main_window();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check if QuickSearchWindow lost focus -> Auto-close
+            if timer_is_qs_open.load(Ordering::SeqCst) {
+                let elapsed = timer_qs_shown.lock().unwrap().elapsed();
+                if elapsed > std::time::Duration::from_millis(400) {
+                    if !is_quick_search_active() {
+                        if let Some(qs) = tray_quick_search_weak.upgrade() {
+                            let _ = qs.hide();
+                            timer_is_qs_open.store(false, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+        },
+    );
+
+    // Initialize Global Hotkey
+    let initial_hotkey = parse_hotkey_string(&config.global_hotkey)
+        .or_else(|_| parse_hotkey_string("Shift+Space"))
+        .ok()
+        .map(|(hk, _)| hk);
+
+    let hotkey_manager = Arc::new(Mutex::new(GlobalHotKeyManager::new().ok()));
+    let active_hotkey = Arc::new(Mutex::new(initial_hotkey));
+
+    if let (Some(ref mut mgr), Some(ref hk)) = (
+        hotkey_manager.lock().unwrap().as_mut(),
+        active_hotkey.lock().unwrap().as_ref(),
+    ) {
+        if let Err(e) = mgr.register(**hk) {
+            eprintln!("Failed to register initial global hotkey: {}", e);
+        }
+    }
+
+    // Spawn background thread to listen for global hotkey events
+    {
+        let quick_search_weak = quick_search_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let active_hotkey = Arc::clone(&active_hotkey);
+        let is_open = Arc::clone(&is_quick_search_open);
+        let shown_at = Arc::clone(&quick_search_shown_at);
+
+        thread::spawn(move || {
+            let receiver = GlobalHotKeyEvent::receiver();
+            while let Ok(event) = receiver.recv() {
+                if event.state == HotKeyState::Pressed {
+                    let current_hk_id = active_hotkey.lock().unwrap().map(|hk| hk.id());
+                    if current_hk_id == Some(event.id) {
+                        let weak = quick_search_weak.clone();
+                        let m_store = Arc::clone(&metadata_store);
+                        let is_open = Arc::clone(&is_open);
+                        let shown_at = Arc::clone(&shown_at);
+
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(qs) = weak.upgrade() {
+                                qs.set_search_text("".into());
+                                let initial_results = {
+                                    let store = m_store.lock().unwrap();
+                                    filter_quick_search_results("", &store)
+                                };
+                                let model = std::rc::Rc::new(slint::VecModel::from(initial_results));
+                                qs.set_results(model.into());
+                                qs.set_selected_index(0);
+
+                                // Position in the center of the primary screen
+                                let (screen_w, screen_h) = get_primary_screen_size();
+                                let scale = qs.window().scale_factor();
+                                let logical_w = if scale > 0.0 { screen_w / scale } else { screen_w };
+                                let logical_h = if scale > 0.0 { screen_h / scale } else { screen_h };
+
+                                let win_w = 650.0;
+                                let win_h = 360.0;
+                                let pos_x = (logical_w - win_w) / 2.0;
+                                let pos_y = (logical_h - win_h) / 2.0;
+
+                                qs.window().set_size(slint::LogicalSize::new(win_w, win_h));
+                                qs.window().set_position(slint::LogicalPosition::new(pos_x, pos_y));
+
+                                is_open.store(true, Ordering::SeqCst);
+                                *shown_at.lock().unwrap() = std::time::Instant::now();
+
+                                let _ = qs.show();
+                                qs.invoke_focus_search();
+                                activate_quick_search_window();
+                            }
+                        })
+                        .ok();
+                    }
+                }
+            }
+        });
+    }
+
+    // Quick Search: Query Changed
+    quick_search.on_search_changed({
+        let quick_search_weak = quick_search_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        move |text| {
+            let Some(qs) = quick_search_weak.upgrade() else { return };
+            let results = {
+                let store = metadata_store.lock().unwrap();
+                filter_quick_search_results(text.as_str(), &store)
+            };
+            let model = std::rc::Rc::new(slint::VecModel::from(results));
+            qs.set_results(model.into());
+            qs.set_selected_index(0);
+        }
+    });
+
+    // Quick Search: Enter key pressed -> Copy decrypted note to clipboard & zeroize
+    quick_search.on_action_enter_pressed({
+        let quick_search_weak = quick_search_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
+        move |note_id| {
+            let note_id_str = note_id.as_str().to_string();
+            let meta_opt = {
+                let store = metadata_store.lock().unwrap();
+                store.get(&note_id_str).cloned()
+            };
+
+            if let Some(meta) = meta_opt {
+                let pwd_opt = session_password.lock().unwrap().clone();
+                if let Some(pwd) = pwd_opt {
+                    match load_note_decrypted(pwd.as_str(), &meta.file_path) {
+                        Ok(mut note) => {
+                            if let Ok(mut clipboard) = Clipboard::new() {
+                                let _ = clipboard.set_text(&note.content);
+                            }
+                            note.zeroize();
+                            is_quick_search_open.store(false, Ordering::SeqCst);
+                            if let Some(qs) = quick_search_weak.upgrade() {
+                                let _ = qs.hide();
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to decrypt note for clipboard: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Helper closure for previewing note in QuickViewerWindow & zeroizing buffer
+    let handle_preview = {
+        let quick_search_weak = quick_search_weak.clone();
+        let quick_viewer_weak = quick_viewer_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
+
+        move |note_id: slint::SharedString| {
+            let note_id_str = note_id.as_str().to_string();
+            let meta_opt = {
+                let store = metadata_store.lock().unwrap();
+                store.get(&note_id_str).cloned()
+            };
+
+            if let Some(meta) = meta_opt {
+                let pwd_opt = session_password.lock().unwrap().clone();
+                if let Some(pwd) = pwd_opt {
+                    match load_note_decrypted(pwd.as_str(), &meta.file_path) {
+                        Ok(mut note) => {
+                            if let Some(qv) = quick_viewer_weak.upgrade() {
+                                qv.set_note_title(note.title.as_str().into());
+                                qv.set_content(note.content.as_str().into());
+
+                                // Center QuickViewerWindow on screen with enlarged dimensions
+                                let (screen_w, screen_h) = get_primary_screen_size();
+                                let scale = qv.window().scale_factor();
+                                let logical_w = if scale > 0.0 { screen_w / scale } else { screen_w };
+                                let logical_h = if scale > 0.0 { screen_h / scale } else { screen_h };
+
+                                let win_w = 960.0f32.min(logical_w - 40.0);
+                                let win_h = 680.0f32.min(logical_h - 60.0);
+                                let pos_x = (logical_w - win_w) / 2.0;
+                                let pos_y = (logical_h - win_h) / 2.0;
+
+                                qv.window().set_size(slint::LogicalSize::new(win_w, win_h));
+                                qv.window().set_position(slint::LogicalPosition::new(pos_x, pos_y));
+
+                                let _ = qv.show();
+                                activate_quick_viewer_window();
+                            }
+                            note.zeroize();
+                            is_quick_search_open.store(false, Ordering::SeqCst);
+                            if let Some(qs) = quick_search_weak.upgrade() {
+                                let _ = qs.hide();
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to decrypt note for viewer: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    // Quick Search: Alt key pressed -> Preview note in QuickViewerWindow
+    quick_search.on_action_alt_pressed({
+        let handle = handle_preview.clone();
+        move |note_id| handle(note_id)
+    });
+
+    // Quick Search: Space key pressed fallback
+    quick_search.on_action_space_pressed({
+        let handle = handle_preview;
+        move |note_id| handle(note_id)
+    });
+
+    // Quick Search & Quick Viewer close handling
+    quick_search.on_close_requested({
+        let quick_search_weak = quick_search_weak.clone();
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
+        move || {
+            is_quick_search_open.store(false, Ordering::SeqCst);
+            if let Some(qs) = quick_search_weak.upgrade() {
+                let _ = qs.hide();
+            }
+        }
+    });
+
+    quick_viewer.on_close_requested({
+        let quick_viewer_weak = quick_viewer_weak.clone();
+        move || {
+            if let Some(qv) = quick_viewer_weak.upgrade() {
+                qv.invoke_clear_data();
+                qv.set_content("".into());
+                qv.set_note_title("".into());
+                let _ = qv.hide();
+            }
+        }
+    });
+
+    quick_viewer.window().on_close_requested({
+        let quick_viewer_weak = quick_viewer_weak.clone();
+        move || {
+            if let Some(qv) = quick_viewer_weak.upgrade() {
+                qv.invoke_clear_data();
+                qv.set_content("".into());
+                qv.set_note_title("".into());
+                let _ = qv.hide();
+            }
+            slint::CloseRequestResponse::HideWindow
+        }
+    });
 
     // Startup flow: Check if vault path is empty or does not exist
     let needs_onboarding = initial_vault_path_str.trim().is_empty();
@@ -834,15 +1493,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
+            let cfg = app_config.lock().unwrap();
             let cur_path = vault_path.lock().unwrap().to_string_lossy().to_string();
             let cur_multi = use_multithreading.load(Ordering::Relaxed);
-            let cur_theme = app_config.lock().unwrap().theme.clone();
+            let cur_theme = cfg.theme.clone();
+            let cur_hotkey = cfg.global_hotkey.clone();
+            let cur_minimize = cfg.minimize_to_tray;
             let is_dark = cur_theme == "dark";
 
             ui.set_settings_vault_path(cur_path.into());
             ui.set_settings_use_multithreading(cur_multi);
             ui.global::<Theme>().set_is_dark(is_dark);
             ui.set_settings_theme(cur_theme.into());
+            ui.set_settings_global_hotkey(cur_hotkey.into());
+            ui.set_settings_minimize_to_tray(cur_minimize);
             ui.set_settings_cur_pwd("".into());
             ui.set_settings_new_pwd("".into());
             ui.set_settings_confirm_pwd("".into());
@@ -858,32 +1522,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_save_settings_requested({
         let window_weak = window_weak.clone();
+        let quick_search_weak = quick_search_weak.clone();
+        let quick_viewer_weak = quick_viewer_weak.clone();
         let vault_path = Arc::clone(&vault_path);
         let use_multithreading = Arc::clone(&use_multithreading);
         let app_config = Arc::clone(&app_config);
+        let hotkey_manager = Arc::clone(&hotkey_manager);
+        let active_hotkey = Arc::clone(&active_hotkey);
         let session_password = Arc::clone(&session_password);
         let metadata_store = Arc::clone(&metadata_store);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
-        move |new_path_str, new_multi, new_theme_str| {
+        move |new_path_str, new_multi, new_theme_str, new_hotkey_str, new_min_tray| {
             let Some(ui) = window_weak.upgrade() else { return };
             let new_path_clean = new_path_str.trim().to_string();
             let new_theme_clean = new_theme_str.trim().to_string();
+            let new_hotkey_clean = new_hotkey_str.trim().to_string();
+
+            let parse_result = parse_hotkey_string(&new_hotkey_clean);
+            let (new_hk_opt, clean_hotkey_str) = match parse_result {
+                Ok((hk, norm)) => (Some(hk), norm),
+                Err(e) => {
+                    eprintln!("Invalid hotkey entered '{}': {}", new_hotkey_clean, e);
+                    (None, new_hotkey_clean.clone())
+                }
+            };
 
             // 1. Update and save config.json
-            {
+            let old_hotkey = {
                 let mut cfg = app_config.lock().unwrap();
+                let old_hk = cfg.global_hotkey.clone();
                 cfg.vault_path = new_path_clean.clone();
                 cfg.use_multithreading = new_multi;
                 cfg.theme = new_theme_clean.clone();
+                cfg.global_hotkey = clean_hotkey_str.clone();
+                cfg.minimize_to_tray = new_min_tray;
                 if let Err(e) = cfg.save() {
                     eprintln!("Failed to save config.json: {}", e);
                 }
+                old_hk
+            };
+
+            // 1b. If hotkey changed, update global registration
+            if let Some(new_hk) = new_hk_opt {
+                if old_hotkey != clean_hotkey_str {
+                    if let Some(ref mut mgr) = *hotkey_manager.lock().unwrap() {
+                        let mut cur_hk_guard = active_hotkey.lock().unwrap();
+                        if let Some(old_hk) = cur_hk_guard.take() {
+                            let _ = mgr.unregister(old_hk);
+                        }
+                        if let Ok(()) = mgr.register(new_hk) {
+                            *cur_hk_guard = Some(new_hk);
+                        }
+                    }
+                }
             }
 
+            ui.set_settings_global_hotkey(clean_hotkey_str.into());
+            ui.set_settings_minimize_to_tray(new_min_tray);
+
             // 2. Apply theme dynamically
-            ui.global::<Theme>().set_is_dark(new_theme_clean == "dark");
+            let is_dark_mode = new_theme_clean == "dark";
+            ui.global::<Theme>().set_is_dark(is_dark_mode);
+            if let Some(qs) = quick_search_weak.upgrade() {
+                qs.global::<Theme>().set_is_dark(is_dark_mode);
+            }
+            if let Some(qv) = quick_viewer_weak.upgrade() {
+                qv.global::<Theme>().set_is_dark(is_dark_mode);
+            }
 
             // 3. Update multithreading state
             use_multithreading.store(new_multi, Ordering::Relaxed);
@@ -928,9 +1635,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_theme_changed({
         let window_weak = window_weak.clone();
+        let quick_search_weak = quick_search_weak.clone();
+        let quick_viewer_weak = quick_viewer_weak.clone();
         move |theme_str| {
-            let Some(ui) = window_weak.upgrade() else { return };
-            ui.global::<Theme>().set_is_dark(theme_str.trim() == "dark");
+            let is_dark_mode = theme_str.trim() == "dark";
+            if let Some(ui) = window_weak.upgrade() {
+                ui.global::<Theme>().set_is_dark(is_dark_mode);
+            }
+            if let Some(qs) = quick_search_weak.upgrade() {
+                qs.global::<Theme>().set_is_dark(is_dark_mode);
+            }
+            if let Some(qv) = quick_viewer_weak.upgrade() {
+                qv.global::<Theme>().set_is_dark(is_dark_mode);
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Record Hotkey Requested from Settings Shortcut Box
+    // -------------------------------------------------------------
+    main_window.on_record_hotkey_requested(|key_text, ctrl, alt, shift, meta| {
+        if let Some(combo) = format_key_combination(key_text.as_str(), ctrl, alt, shift, meta) {
+            combo.into()
+        } else {
+            "".into()
         }
     });
 
@@ -1891,6 +2619,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Keep tray icon and timer alive alongside Slint event loop
+    let _tray_icon = tray_icon_handle;
+    let _tray_timer = tray_timer;
+
     // Run Slint GUI event loop
     main_window.run()?;
     Ok(())
@@ -1947,5 +2679,128 @@ mod tests {
         assert!(md.contains("tags: [\"work\",\"rust\"]\n"));
         assert!(md.contains("date: \"2026-09-13 14:00:00 UTC\"\n"));
         assert!(md.contains("---\n\n# Heading\n\nThis is a secret note."));
+    }
+
+    #[test]
+    fn test_filter_quick_search_results() {
+        let mut store = HashMap::new();
+        for i in 1..=10 {
+            store.insert(
+                format!("note-{}", i),
+                NoteMetaSummary {
+                    title: format!("Title {}", i),
+                    category: "General".to_string(),
+                    tags: if i % 2 == 0 { vec!["even".to_string(), "special".to_string()] } else { vec!["odd".to_string()] },
+                    date: "2026-01-01".to_string(),
+                    updated_at: i * 100,
+                    file_path: PathBuf::from(format!("/vault/note-{}.vault", i)),
+                },
+            );
+        }
+
+        // 1. Empty query should return top 5 sorted by updated_at desc (10, 9, 8, 7, 6)
+        let top5 = filter_quick_search_results("", &store);
+        assert_eq!(top5.len(), 5);
+        assert_eq!(top5[0].title.as_str(), "Title 10");
+        assert_eq!(top5[1].title.as_str(), "Title 9");
+        assert_eq!(top5[2].title.as_str(), "Title 8");
+        assert_eq!(top5[3].title.as_str(), "Title 7");
+        assert_eq!(top5[4].title.as_str(), "Title 6");
+
+        // 2. Query matching by tag
+        let special = filter_quick_search_results("special", &store);
+        assert_eq!(special.len(), 5); // 10, 8, 6, 4, 2
+        assert_eq!(special[0].title.as_str(), "Title 10");
+        assert_eq!(special[1].title.as_str(), "Title 8");
+
+        // 3. Query matching specific title
+        let note3 = filter_quick_search_results("Title 3", &store);
+        assert_eq!(note3.len(), 1);
+        assert_eq!(note3[0].id.as_str(), "note-3");
+
+        // 4. Non-matching query
+        let empty = filter_quick_search_results("nonexistent-search-term", &store);
+        assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn test_hotkey_manager_reregister() {
+        if let Ok(mgr) = GlobalHotKeyManager::new() {
+            let hk1 = "Shift+Space".parse::<HotKey>().unwrap();
+            let hk2 = "Control+Shift+N".parse::<HotKey>().unwrap();
+            assert!(mgr.register(hk1).is_ok());
+            assert!(mgr.unregister(hk1).is_ok());
+            assert!(mgr.register(hk2).is_ok());
+            assert!(mgr.unregister(hk2).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_parse_hotkey_string() {
+        // Standard formats
+        let (hk1, s1) = parse_hotkey_string("Shift+Space").unwrap();
+        assert_eq!(s1, "Shift+Space");
+        assert_eq!(hk1, "Shift+Space".parse::<HotKey>().unwrap());
+
+        // Spaced formats
+        let (_hk2, s2) = parse_hotkey_string("Shift + Space").unwrap();
+        assert_eq!(s2, "Shift+Space");
+
+        // Lowercase and aliases
+        let (_hk3, s3) = parse_hotkey_string("ctrl+shift+space").unwrap();
+        assert_eq!(s3, "Control+Shift+Space");
+
+        let (_hk4, s4) = parse_hotkey_string("control + shift + n").unwrap();
+        assert_eq!(s4, "Control+Shift+N");
+
+        let (_hk5, s5) = parse_hotkey_string("Alt + Space").unwrap();
+        assert_eq!(s5, "Alt+Space");
+
+        // Invalid
+        assert!(parse_hotkey_string("").is_err());
+        assert!(parse_hotkey_string("   ").is_err());
+    }
+
+    #[test]
+    fn test_format_key_combination() {
+        // Shift + Space
+        assert_eq!(
+            format_key_combination(" ", false, false, true, false),
+            Some("Shift+Space".to_string())
+        );
+
+        // Control + Shift + N
+        assert_eq!(
+            format_key_combination("n", true, false, true, false),
+            Some("Control+Shift+N".to_string())
+        );
+
+        // Alt + Space
+        assert_eq!(
+            format_key_combination(" ", false, true, false, false),
+            Some("Alt+Space".to_string())
+        );
+
+        // F12 without modifiers
+        assert_eq!(
+            format_key_combination("F12", false, false, false, false),
+            Some("F12".to_string())
+        );
+
+        // Plain key without modifiers should be rejected for global hotkeys
+        assert_eq!(
+            format_key_combination("a", false, false, false, false),
+            None
+        );
+
+        // Only modifier should be rejected
+        assert_eq!(
+            format_key_combination("\u{0010}", false, false, true, false),
+            None
+        );
+        assert_eq!(
+            format_key_combination("", false, false, true, false),
+            None
+        );
     }
 }

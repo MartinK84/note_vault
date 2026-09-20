@@ -11,6 +11,14 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 
+fn default_global_hotkey() -> String {
+    "Shift+Space".to_string()
+}
+
+fn default_minimize_to_tray() -> bool {
+    true
+}
+
 /// Persistent configuration for NoteVault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -22,6 +30,12 @@ pub struct AppConfig {
 
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    #[serde(default = "default_global_hotkey")]
+    pub global_hotkey: String,
+
+    #[serde(default = "default_minimize_to_tray")]
+    pub minimize_to_tray: bool,
 }
 
 impl Default for AppConfig {
@@ -30,6 +44,8 @@ impl Default for AppConfig {
             vault_path: String::new(),
             use_multithreading: true,
             theme: default_theme(),
+            global_hotkey: default_global_hotkey(),
+            minimize_to_tray: default_minimize_to_tray(),
         }
     }
 }
@@ -84,6 +100,8 @@ mod tests {
         assert_eq!(config.vault_path, "");
         assert!(config.use_multithreading);
         assert_eq!(config.theme, "dark");
+        assert_eq!(config.global_hotkey, "Shift+Space");
+        assert!(config.minimize_to_tray);
     }
 
     #[test]
@@ -95,6 +113,8 @@ mod tests {
             vault_path: "D:/MyVault".to_string(),
             use_multithreading: false,
             theme: "light".to_string(),
+            global_hotkey: "Control+Shift+N".to_string(),
+            minimize_to_tray: false,
         };
 
         config.save_to_path(&config_path).expect("Saving config should succeed");
@@ -119,6 +139,8 @@ mod tests {
         assert_eq!(loaded.vault_path, "D:/SomePath");
         assert!(loaded.use_multithreading);
         assert_eq!(loaded.theme, "dark");
+        assert_eq!(loaded.global_hotkey, "Shift+Space");
+        assert!(loaded.minimize_to_tray);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

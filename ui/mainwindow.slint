@@ -14,8 +14,9 @@ import {
     ExportModal 
 } from "modals.slint";
 import { SettingsDialog } from "settings.slint";
+import { QuickSearchWindow, QuickViewerWindow, QuickSearchResult } from "quick_search.slint";
 
-export { Theme, Palette }
+export { Theme, Palette, QuickSearchWindow, QuickViewerWindow, QuickSearchResult }
 
 export struct NoteMetadata {
     id: string,
@@ -113,6 +114,8 @@ export component MainWindow inherits Window {
     in-out property <bool> settings_use_multithreading: true;
     in-out property <string> settings_theme: "dark";
     in property <[string]> theme_options: ["dark", "light"];
+    in-out property <string> settings_global_hotkey: "Shift+Space";
+    in-out property <bool> settings_minimize_to_tray: true;
     in-out property <string> settings_cur_pwd: "";
     in-out property <string> settings_new_pwd: "";
     in-out property <string> settings_confirm_pwd: "";
@@ -154,12 +157,13 @@ export component MainWindow inherits Window {
 
     // Settings & File callbacks
     callback open_settings_requested();
-    callback save_settings_requested(string, bool, string); // path, multithreading, theme
+    callback save_settings_requested(string, bool, string, string, bool); // path, multithreading, theme, hotkey, minimize_to_tray
     callback browse_vault_path_requested();
     callback change_password_requested(string, string, string); // current, new, confirm
     callback welcome_open_vault_requested(string);
     callback exit_requested();
     callback theme_changed(string);
+    callback record_hotkey_requested(string, bool, bool, bool, bool) -> string;
 
     // Export callbacks
     callback browse_export_path_requested();
@@ -1377,6 +1381,8 @@ export component MainWindow inherits Window {
         use_multithreading <=> root.settings_use_multithreading;
         theme <=> root.settings_theme;
         theme_options: root.theme_options;
+        global_hotkey <=> root.settings_global_hotkey;
+        minimize_to_tray <=> root.settings_minimize_to_tray;
         current_password <=> root.settings_cur_pwd;
         new_password <=> root.settings_new_pwd;
         confirm_password <=> root.settings_confirm_pwd;
@@ -1388,14 +1394,17 @@ export component MainWindow inherits Window {
         browse_path_clicked => {
             root.browse_vault_path_requested();
         }
-        save_settings(path, multithreading, theme) => {
-            root.save_settings_requested(path, multithreading, theme);
+        save_settings(path, multithreading, theme, hotkey, min_tray) => {
+            root.save_settings_requested(path, multithreading, theme, hotkey, min_tray);
         }
         change_password(cur, new_pwd, confirm) => {
             root.change_password_requested(cur, new_pwd, confirm);
         }
         theme_changed(theme) => {
             root.theme_changed(theme);
+        }
+        record_key_event(key, ctrl, alt, shift, meta) => {
+            root.record_hotkey_requested(key, ctrl, alt, shift, meta)
         }
         close_clicked => {
             root.show_settings_modal = false;
