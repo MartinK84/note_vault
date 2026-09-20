@@ -132,7 +132,7 @@ export component QuickSearchWindow inherits Window {
 
                     search_input := LineEdit {
                         text <=> root.search_text;
-                        placeholder-text: "Search notes by title or tags... (Enter to copy, Alt to view, Esc to close)";
+                        placeholder-text: "Search notes by title or tags...";
                         font-size: 14px;
                         horizontal-stretch: 1;
 
@@ -305,7 +305,7 @@ export component QuickSearchWindow inherits Window {
                     alignment: center;
 
                     Text {
-                        text: "↑↓ Navigate  •  Enter Copy to Clipboard  •  Alt View Note  •  Esc Close";
+                        text: "↑↓ Navigate  •  [Enter] Copy to Clipboard  •  [Alt] View Note  •  [Esc] Close";
                         font-size: 11px;
                         color: Theme.text_muted;
                         horizontal-alignment: center;
