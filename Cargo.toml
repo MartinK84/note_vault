@@ -25,9 +25,11 @@ rfd = "0.17.2"
 global-hotkey = "0.8.0"
 tray-icon = "0.25.1"
 arboard = "3.6.1"
+resvg = "0.47.0"
 
 [build-dependencies]
 slint-build = "1.17.1"
+winres = "0.1"
 
 [[bin]]
 name = "note_vault_cli"

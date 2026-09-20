@@ -216,33 +216,53 @@ pub fn format_decrypted_txt_export(
     txt_str
 }
 
-/// Builds a 32x32 RGBA icon for the system tray matching NoteVault branding.
+/// Builds a 32x32 RGBA icon for the system tray using the dark orange logo.svg.
 fn create_tray_icon() -> Result<Icon, Box<dyn std::error::Error>> {
-    let width = 32;
-    let height = 32;
-    let mut rgba = Vec::with_capacity(width * height * 4);
-    for y in 0..height {
-        for x in 0..width {
-            let dx = (x as i32) - 16;
-            let dy = (y as i32) - 16;
-            let dist_sq = dx * dx + dy * dy;
-            // Draw a circular vault emblem with Catppuccin accent (#89b4fa) and dark surface (#181825)
-            if dist_sq <= 14 * 14 {
-                if (x >= 12 && x <= 20 && y >= 10 && y <= 22)
-                    && (x < 14 || x > 18 || y < 14 || y > 18)
-                {
-                    // Inner keyhole / lock motif
-                    rgba.extend_from_slice(&[24, 24, 37, 255]); // #181825
-                } else {
-                    rgba.extend_from_slice(&[137, 180, 250, 255]); // #89b4fa
-                }
-            } else {
-                rgba.extend_from_slice(&[0, 0, 0, 0]); // transparent
-            }
+    const SVG_STR: &str = include_str!("../assets/icons/logo.svg");
+    let width = 32u32;
+    let height = 32u32;
+
+    let opt = resvg::usvg::Options::default();
+    let tree = resvg::usvg::Tree::from_str(SVG_STR, &opt)?;
+
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| "Failed to allocate icon pixmap".to_string())?;
+
+    let svg_w = tree.size().width();
+    let svg_h = tree.size().height();
+    // Render the logo with a clean 2px margin inside 32x32 canvas
+    let padding = 2.0f32;
+    let draw_w = (width as f32) - 2.0 * padding;
+    let draw_h = (height as f32) - 2.0 * padding;
+    let scale_x = draw_w / svg_w;
+    let scale_y = draw_h / svg_h;
+    let scale = scale_x.min(scale_y);
+    let offset_x = padding + (draw_w - svg_w * scale) / 2.0;
+    let offset_y = padding + (draw_h - svg_h * scale) / 2.0;
+
+    let transform = resvg::tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, offset_x, offset_y);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    // Convert premultiplied RGBA from tiny_skia into straight RGBA for tray_icon
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for chunk in pixmap.data().chunks_exact(4) {
+        let r = chunk[0];
+        let g = chunk[1];
+        let b = chunk[2];
+        let a = chunk[3];
+        if a == 0 {
+            rgba.extend_from_slice(&[0, 0, 0, 0]);
+        } else if a == 255 {
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        } else {
+            let r = ((r as u32 * 255 + (a as u32 / 2)) / a as u32).min(255) as u8;
+            let g = ((g as u32 * 255 + (a as u32 / 2)) / a as u32).min(255) as u8;
+            let b = ((b as u32 * 255 + (a as u32 / 2)) / a as u32).min(255) as u8;
+            rgba.extend_from_slice(&[r, g, b, a]);
         }
     }
-    Icon::from_rgba(rgba, width as u32, height as u32)
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+
+    Icon::from_rgba(rgba, width, height).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 /// Filters notes in `metadata_store` by query (matching Title or Tags only),
@@ -3336,6 +3356,12 @@ mod tests {
         assert!(txt.contains("Date: 2026-09-20\n"));
         assert!(txt.contains("----------------------------------------\n\n"));
         assert!(txt.contains("Hello decrypted world!"));
+    }
+
+    #[test]
+    fn test_create_tray_icon_succeeds() {
+        let icon_res = create_tray_icon();
+        assert!(icon_res.is_ok(), "Tray icon creation from logo.svg must succeed");
     }
 }
 

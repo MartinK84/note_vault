@@ -10,6 +10,7 @@ export struct QuickSearchResult {
 
 export component QuickSearchWindow inherits Window {
     title: "NoteVault Quick Search";
+    icon: @image-url("../assets/icons/logo.svg");
     no-frame: true;
     width: 650px;
     preferred-width: 650px;
@@ -333,6 +334,7 @@ export component QuickSearchWindow inherits Window {
 
 export component QuickViewerWindow inherits Window {
     title: root.note_title != "" ? root.note_title + " - NoteVault Quick Viewer" : "NoteVault Quick Viewer";
+    icon: @image-url("../assets/icons/logo.svg");
     preferred-width: 960px;
     preferred-height: 680px;
     min-width: 600px;
