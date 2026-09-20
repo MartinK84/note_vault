@@ -14,7 +14,7 @@ use note_vault::{load_note_decrypted, save_note_encrypted, Note};
 use rayon::prelude::*;
 use slint::Model;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, MouseButton, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use uuid::Uuid;
 use walkdir::WalkDir;
 use zeroize::{Zeroize, Zeroizing};
@@ -605,6 +605,7 @@ fn restore_main_window() {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn SetForegroundWindow(hWnd: isize) -> i32;
+        fn BringWindowToTop(hWnd: isize) -> i32;
         fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
         fn GetWindowLongPtrW(hWnd: isize, nIndex: i32) -> isize;
         fn SetWindowLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
@@ -619,6 +620,7 @@ fn restore_main_window() {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (cur & !WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW);
             ShowWindow(hwnd, 9); // 9 = SW_RESTORE restores size, displays on screen and taskbar
             taskbar_add_tab(hwnd);
+            BringWindowToTop(hwnd);
             SetForegroundWindow(hwnd);
         }
     }
@@ -1158,25 +1160,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_editor_font_size(config.editor_font_size as i32);
     main_window.set_line_numbers_text("1".into());
 
-    // Intercept close requests to minimize to system tray if enabled
+    // Close requests always quit the application cleanly (even if minimize to tray is enabled)
     main_window.window().on_close_requested({
         let window_weak = window_weak.clone();
-        let app_config = Arc::clone(&app_config);
         move || {
-            let minimize = app_config.lock().unwrap().minimize_to_tray;
-            if minimize {
-                #[cfg(target_os = "windows")]
-                MAIN_WINDOW_HIDDEN_TO_TRAY.store(true, Ordering::Relaxed);
-                if let Some(ui) = window_weak.upgrade() {
-                    let _ = ui.hide();
-                }
-                #[cfg(target_os = "windows")]
-                hide_main_window();
-                slint::CloseRequestResponse::HideWindow
-            } else {
-                let _ = slint::quit_event_loop();
-                std::process::exit(0);
+            if let Some(ui) = window_weak.upgrade() {
+                let _ = ui.hide();
             }
+            let _ = slint::quit_event_loop();
+            std::process::exit(0);
         }
     });
 
@@ -1194,6 +1186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tray_icon_handle = create_tray_icon().ok().and_then(|icon| {
         TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
+            .with_menu_on_left_click(false)
             .with_tooltip("NoteVault - Encrypted Notes")
             .with_icon(icon)
             .build()
@@ -1229,7 +1222,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             while let Ok(event) = TrayIconEvent::receiver().try_recv() {
                 match event {
-                    TrayIconEvent::Click { button: MouseButton::Left, .. } => {
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                    | TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    } => {
                         if let Some(ui) = tray_window_weak.upgrade() {
                             let _ = ui.show();
                             #[cfg(target_os = "windows")]
