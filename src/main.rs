@@ -880,16 +880,18 @@ fn load_note_into_ui(
     note_id: &str,
     metadata_store: &Arc<Mutex<HashMap<String, NoteMetaSummary>>>,
     session_password: &Arc<Mutex<Option<Zeroizing<String>>>>,
+    session_keyfile: &Arc<Mutex<Option<Zeroizing<Vec<u8>>>>>,
 ) {
     if note_id.is_empty() {
         return;
     }
 
-    let (meta, password_opt) = {
+    let (meta, password_opt, keyfile_opt) = {
         let store = metadata_store.lock().unwrap();
         let meta = store.get(note_id).cloned();
         let session = session_password.lock().unwrap();
-        (meta, session.clone())
+        let keyfile = session_keyfile.lock().unwrap();
+        (meta, session.clone(), keyfile.clone())
     };
 
     if let Some(meta) = meta {
@@ -908,7 +910,8 @@ fn load_note_into_ui(
         ui.set_note_date(meta.date.clone().into());
 
         if let Some(password) = password_opt {
-            match load_note_decrypted(&password, &meta.file_path) {
+            let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+            match load_note_decrypted(&password, kf_bytes, &meta.file_path) {
                 Ok(mut note) => {
                     ui.set_line_numbers_text(format_line_numbers(&note.content).into());
                     ui.set_note_content(note.content.as_str().into());
@@ -936,10 +939,12 @@ fn load_note_into_ui(
 /// respecting `use_multithreading` (parallel with Rayon or sequential).
 fn trigger_vault_reload(
     password: Zeroizing<String>,
+    keyfile: Option<Zeroizing<Vec<u8>>>,
     window_weak: slint::Weak<MainWindow>,
     vault_dir: Arc<Mutex<PathBuf>>,
     meta_store: Arc<Mutex<HashMap<String, NoteMetaSummary>>>,
     session_pass: Arc<Mutex<Option<Zeroizing<String>>>>,
+    session_key: Arc<Mutex<Option<Zeroizing<Vec<u8>>>>>,
     a_folder: Arc<Mutex<String>>,
     s_query: Arc<Mutex<String>>,
     use_multi: Arc<AtomicBool>,
@@ -978,6 +983,7 @@ fn trigger_vault_reload(
 
         if total_files == 0 {
             *session_pass.lock().unwrap() = Some(password);
+            *session_key.lock().unwrap() = keyfile;
             meta_store.lock().unwrap().clear();
 
             let weak = weak.clone();
@@ -1000,6 +1006,7 @@ fn trigger_vault_reload(
 
         let completed_count = Arc::new(AtomicUsize::new(0));
         let decrypt_failed = Arc::new(AtomicBool::new(false));
+        let kf_bytes = keyfile.as_deref().map(|b| b.as_slice());
 
         let process_file = |file_path: PathBuf| -> Option<(String, NoteMetaSummary)> {
             if decrypt_failed.load(Ordering::Relaxed) {
@@ -1017,7 +1024,7 @@ fn trigger_vault_reload(
                 _ => "General".to_string(),
             };
 
-            let item = match load_note_decrypted(&password, &file_path) {
+            let item = match load_note_decrypted(&password, kf_bytes, &file_path) {
                 Ok(mut note) => {
                     let note_id = note.id.to_string();
                     let title = if note.title.is_empty() {
@@ -1077,6 +1084,7 @@ fn trigger_vault_reload(
         if decrypt_failed.load(Ordering::Relaxed) {
             if is_initial_unlock {
                 *session_pass.lock().unwrap() = None;
+                *session_key.lock().unwrap() = None;
             }
             let weak_ui = weak.clone();
             slint::invoke_from_event_loop(move || {
@@ -1084,7 +1092,7 @@ fn trigger_vault_reload(
                     ui.set_is_loading(false);
                     if is_initial_unlock {
                         ui.set_unlock_error_message(
-                            "Decryption failed: invalid master password or corrupted note file.".into(),
+                            "Decryption failed: invalid master password, keyfile mismatch, or corrupted note file.".into(),
                         );
                     } else {
                         ui.set_vault_status_text("Error: Decryption failed during refresh.".into());
@@ -1102,6 +1110,7 @@ fn trigger_vault_reload(
         }
 
         *session_pass.lock().unwrap() = Some(password);
+        *session_key.lock().unwrap() = keyfile;
 
         let weak_ui = weak.clone();
         let v_path = current_vault_path;
@@ -1141,6 +1150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vault_path = Arc::new(Mutex::new(initial_vault_path.clone()));
     let use_multithreading = Arc::new(AtomicBool::new(config.use_multithreading));
     let session_password: Arc<Mutex<Option<Zeroizing<String>>>> = Arc::new(Mutex::new(None));
+    let session_keyfile: Arc<Mutex<Option<Zeroizing<Vec<u8>>>>> = Arc::new(Mutex::new(None));
     let metadata_store: Arc<Mutex<HashMap<String, NoteMetaSummary>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("*All Notes*".to_string()));
@@ -1187,6 +1197,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_editor_highlight_current_line(config.editor_highlight_current_line);
     main_window.set_editor_font_size(config.editor_font_size as i32);
     main_window.set_line_numbers_text("1".into());
+
+    // Check keyfile on startup if configured
+    if let Some(ref kpath) = config.keyfile_path {
+        let p = Path::new(kpath);
+        if !p.exists() {
+            main_window.set_unlock_error_message(
+                format!("Keyfile missing at {}. Please locate it.", kpath).into(),
+            );
+            main_window.set_show_keyfile_browse(true);
+        }
+    }
 
     // Close requests always quit the application cleanly (even if minimize to tray is enabled)
     main_window.window().on_close_requested({
@@ -1410,6 +1431,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let quick_search_weak = quick_search_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
         move |note_id| {
             let note_id_str = note_id.as_str().to_string();
@@ -1419,9 +1441,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if let Some(meta) = meta_opt {
-                let pwd_opt = session_password.lock().unwrap().clone();
+                let (pwd_opt, kf_opt) = {
+                    let s_pwd = session_password.lock().unwrap();
+                    let s_kf = session_keyfile.lock().unwrap();
+                    (s_pwd.clone(), s_kf.clone())
+                };
                 if let Some(pwd) = pwd_opt {
-                    match load_note_decrypted(pwd.as_str(), &meta.file_path) {
+                    let kf_bytes = kf_opt.as_deref().map(|b| b.as_slice());
+                    match load_note_decrypted(pwd.as_str(), kf_bytes, &meta.file_path) {
                         Ok(mut note) => {
                             if let Ok(mut clipboard) = Clipboard::new() {
                                 let _ = clipboard.set_text(&note.content);
@@ -1447,6 +1474,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let quick_viewer_weak = quick_viewer_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
 
         move |note_id: slint::SharedString| {
@@ -1457,9 +1485,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if let Some(meta) = meta_opt {
-                let pwd_opt = session_password.lock().unwrap().clone();
+                let (pwd_opt, kf_opt) = {
+                    let s_pwd = session_password.lock().unwrap();
+                    let s_kf = session_keyfile.lock().unwrap();
+                    (s_pwd.clone(), s_kf.clone())
+                };
                 if let Some(pwd) = pwd_opt {
-                    match load_note_decrypted(pwd.as_str(), &meta.file_path) {
+                    let kf_bytes = kf_opt.as_deref().map(|b| b.as_slice());
+                    match load_note_decrypted(pwd.as_str(), kf_bytes, &meta.file_path) {
                         Ok(mut note) => {
                             if let Some(qv) = quick_viewer_weak.upgrade() {
                                 qv.set_note_title(note.title.as_str().into());
@@ -1620,6 +1653,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -1639,6 +1673,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
             };
+            let keyfile_opt = session_keyfile.lock().unwrap().clone();
 
             // Clone metadata_store so we don't hold the mutex during the entire I/O process
             let notes_to_export: Vec<(String, NoteMetaSummary)> = {
@@ -1653,6 +1688,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let weak = window_weak.clone();
 
             thread::spawn(move || {
+                let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
                 let total_notes = notes_to_export.len();
                 if total_notes == 0 {
                     let weak_ui = weak.clone();
@@ -1694,7 +1730,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok();
 
                     // Decrypt note payload
-                    match load_note_decrypted(&password, &meta.file_path) {
+                    match load_note_decrypted(&password, kf_bytes, &meta.file_path) {
                         Ok(mut decrypted_note) => {
                             let category_name = if meta.category.trim().is_empty() {
                                 "General".to_string()
@@ -1860,6 +1896,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_password_change_status("".into());
             ui.set_password_change_success(false);
             ui.set_is_reencrypting(false);
+            ui.set_settings_keyfile_cur_pwd("".into());
+            ui.set_settings_new_keyfile_path("".into());
+            ui.set_settings_remove_keyfile(false);
+            ui.set_keyfile_status("".into());
+            ui.set_keyfile_success(false);
+            ui.set_is_keyfile_reencrypting(false);
+            ui.set_keyfile_reencrypt_progress(0.0);
             ui.set_show_settings_modal(true);
         }
     });
@@ -1877,6 +1920,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let hotkey_manager = Arc::clone(&hotkey_manager);
         let active_hotkey = Arc::clone(&active_hotkey);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let metadata_store = Arc::clone(&metadata_store);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
@@ -1965,6 +2009,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Lock vault on folder switch
                 *session_password.lock().unwrap() = None;
+                *session_keyfile.lock().unwrap() = None;
                 metadata_store.lock().unwrap().clear();
                 *active_folder.lock().unwrap() = "*All Notes*".to_string();
                 *search_query.lock().unwrap() = String::new();
@@ -2050,6 +2095,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         let vault_path = Arc::clone(&vault_path);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
 
         move |raw_current, raw_new, raw_confirm| {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -2102,13 +2148,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let weak = window_weak.clone();
             let v_dir = vault_path.lock().unwrap().clone();
             let s_pass = Arc::clone(&session_password);
+            let keyfile_opt = session_keyfile.lock().unwrap().clone();
 
             thread::spawn(move || {
                 let weak_progress = weak.clone();
+                let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
                 let res = note_vault::reencrypt_vault_atomic(
                     &v_dir,
                     &current_pwd,
+                    kf_bytes,
                     &new_pwd,
+                    kf_bytes,
                     move |done, total| {
                         let progress = (done as f32) / (total as f32);
                         let status_msg = format!("Re-encrypting note {} of {}...", done, total);
@@ -2152,6 +2202,189 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     format!("Re-encryption aborted: {}", err_msg).into(),
                                 );
                                 ui.set_password_change_success(false);
+                            }
+                        })
+                        .ok();
+                    }
+                }
+            });
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Browse New Keyfile in Settings
+    // -------------------------------------------------------------
+    main_window.on_browse_new_keyfile_requested({
+        let window_weak = window_weak.clone();
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let picked_file = rfd::FileDialog::new()
+                .set_title("Select New Keyfile")
+                .pick_file();
+            if let Some(path) = picked_file {
+                ui.set_settings_new_keyfile_path(path.to_string_lossy().to_string().into());
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Unlock Browse Keyfile (from Unlock Modal)
+    // -------------------------------------------------------------
+    main_window.on_unlock_browse_keyfile_requested({
+        let window_weak = window_weak.clone();
+        let app_config = Arc::clone(&app_config);
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let picked_file = rfd::FileDialog::new()
+                .set_title("Locate Keyfile")
+                .pick_file();
+            if let Some(path) = picked_file {
+                let path_str = path.to_string_lossy().to_string();
+                let mut cfg = app_config.lock().unwrap();
+                cfg.keyfile_path = Some(path_str.clone());
+                let _ = cfg.save();
+                ui.set_unlock_error_message("".into());
+                ui.set_show_keyfile_browse(false);
+                ui.set_vault_status_text(format!("Keyfile located: {}", path_str).into());
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Update Keyfile (Add / Change / Remove Keyfile)
+    // -------------------------------------------------------------
+    main_window.on_update_keyfile_requested({
+        let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+        let app_config = Arc::clone(&app_config);
+
+        move |raw_current_pwd, raw_new_path, remove_keyfile| {
+            let Some(ui) = window_weak.upgrade() else { return };
+
+            let current_pwd = Zeroizing::new(raw_current_pwd.to_string());
+
+            // 1. Verify active session is unlocked
+            let session_opt = session_password.lock().unwrap().clone();
+            let active_pwd = match session_opt {
+                Some(p) => p,
+                None => {
+                    ui.set_keyfile_status("Error: Vault must be unlocked to update keyfile.".into());
+                    ui.set_keyfile_success(false);
+                    return;
+                }
+            };
+
+            // 2. Verify current password matches active session
+            if current_pwd.as_str() != active_pwd.as_str() {
+                ui.set_keyfile_status("Error: Current password does not match.".into());
+                ui.set_keyfile_success(false);
+                return;
+            }
+
+            // 3. Determine target keyfile bytes and path
+            let (target_keyfile_bytes, target_keyfile_path) = if remove_keyfile {
+                (None, None)
+            } else {
+                let path_str = raw_new_path.trim().to_string();
+                if path_str.is_empty() {
+                    ui.set_keyfile_status("Error: Please select a keyfile or check Remove Keyfile.".into());
+                    ui.set_keyfile_success(false);
+                    return;
+                }
+                let kf_path = PathBuf::from(&path_str);
+                if !kf_path.exists() {
+                    ui.set_keyfile_status("Error: Selected keyfile does not exist.".into());
+                    ui.set_keyfile_success(false);
+                    return;
+                }
+                match std::fs::read(&kf_path) {
+                    Ok(bytes) => (Some(Zeroizing::new(bytes)), Some(path_str)),
+                    Err(e) => {
+                        ui.set_keyfile_status(format!("Error reading keyfile: {}", e).into());
+                        ui.set_keyfile_success(false);
+                        return;
+                    }
+                }
+            };
+
+            let current_keyfile = session_keyfile.lock().unwrap().clone();
+
+            // 4. Begin atomic re-encryption
+            ui.set_is_keyfile_reencrypting(true);
+            ui.set_keyfile_reencrypt_progress(0.0);
+            ui.set_keyfile_status("Starting atomic re-encryption with new keyfile...".into());
+            ui.set_keyfile_success(false);
+
+            let weak = window_weak.clone();
+            let v_dir = vault_path.lock().unwrap().clone();
+            let s_kf = Arc::clone(&session_keyfile);
+            let s_cfg = Arc::clone(&app_config);
+
+            thread::spawn(move || {
+                let weak_progress = weak.clone();
+                let cur_kf_bytes = current_keyfile.as_deref().map(|b| b.as_slice());
+                let tgt_kf_bytes = target_keyfile_bytes.as_deref().map(|b| b.as_slice());
+
+                let res = note_vault::reencrypt_vault_atomic(
+                    &v_dir,
+                    &current_pwd,
+                    cur_kf_bytes,
+                    &current_pwd,
+                    tgt_kf_bytes,
+                    move |done, total| {
+                        let progress = (done as f32) / (total as f32);
+                        let status_msg = format!("Re-encrypting note {} of {}...", done, total);
+                        let weak_ui = weak_progress.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_ui.upgrade() {
+                                ui.set_keyfile_reencrypt_progress(progress);
+                                ui.set_keyfile_status(status_msg.into());
+                            }
+                        })
+                        .ok();
+                    },
+                );
+
+                match res {
+                    Ok(total) => {
+                        *s_kf.lock().unwrap() = target_keyfile_bytes;
+                        {
+                            let mut cfg = s_cfg.lock().unwrap();
+                            cfg.keyfile_path = target_keyfile_path.clone();
+                            let _ = cfg.save();
+                        }
+
+                        let weak_ui = weak.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_ui.upgrade() {
+                                ui.set_is_keyfile_reencrypting(false);
+                                ui.set_keyfile_reencrypt_progress(1.0);
+                                let msg = if target_keyfile_path.is_some() {
+                                    format!("Keyfile updated successfully ({} notes re-encrypted).", total)
+                                } else {
+                                    format!("Keyfile removed successfully ({} notes re-encrypted).", total)
+                                };
+                                ui.set_keyfile_status(msg.into());
+                                ui.set_keyfile_success(true);
+                                ui.set_settings_keyfile_cur_pwd("".into());
+                                ui.set_settings_new_keyfile_path("".into());
+                                ui.set_settings_remove_keyfile(false);
+                            }
+                        })
+                        .ok();
+                    }
+                    Err(err) => {
+                        let err_msg = err.to_string();
+                        let weak_ui = weak.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak_ui.upgrade() {
+                                ui.set_is_keyfile_reencrypting(false);
+                                ui.set_keyfile_status(
+                                    format!("Keyfile update failed: {}", err_msg).into(),
+                                );
+                                ui.set_keyfile_success(false);
                             }
                         })
                         .ok();
@@ -2217,9 +2450,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let vault_path = Arc::clone(&vault_path);
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
         let use_multithreading = Arc::clone(&use_multithreading);
+        let app_config = Arc::clone(&app_config);
 
         move |raw_password| {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -2231,15 +2466,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
 
+            let keyfile_data = {
+                let cfg = app_config.lock().unwrap();
+                if let Some(ref kpath) = cfg.keyfile_path {
+                    let p = Path::new(kpath);
+                    if !p.exists() {
+                        ui.set_unlock_error_message(
+                            format!("Keyfile missing at {}. Please locate it.", kpath).into(),
+                        );
+                        ui.set_show_keyfile_browse(true);
+                        return;
+                    }
+                    match std::fs::read(p) {
+                        Ok(data) => Some(Zeroizing::new(data)),
+                        Err(e) => {
+                            ui.set_unlock_error_message(
+                                format!("Failed to read keyfile: {}", e).into(),
+                            );
+                            ui.set_show_keyfile_browse(true);
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                }
+            };
+
             ui.set_unlock_password("".into());
             ui.set_unlock_error_message("".into());
+            ui.set_show_keyfile_browse(false);
 
             trigger_vault_reload(
                 password,
+                keyfile_data,
                 window_weak.clone(),
                 Arc::clone(&vault_path),
                 Arc::clone(&metadata_store),
                 Arc::clone(&session_password),
+                Arc::clone(&session_keyfile),
                 Arc::clone(&active_folder),
                 Arc::clone(&search_query),
                 Arc::clone(&use_multithreading),
@@ -2255,6 +2519,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
 
         move |note_id| {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -2264,7 +2529,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_pending_action_payload(note_id);
                 ui.set_show_unsaved_warning(true);
             } else {
-                load_note_into_ui(&ui, note_id.as_str(), &metadata_store, &session_password);
+                load_note_into_ui(&ui, note_id.as_str(), &metadata_store, &session_password, &session_keyfile);
             }
         }
     });
@@ -2277,6 +2542,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let vault_path = Arc::clone(&vault_path);
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
         let use_multithreading = Arc::clone(&use_multithreading);
@@ -2298,6 +2564,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         payload.as_str(),
                         &metadata_store,
                         &session_password,
+                        &session_keyfile,
                     );
                 }
                 "select_folder" => {
@@ -2337,13 +2604,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "rescan_vault" => {
                     let password_opt = session_password.lock().unwrap().clone();
+                    let keyfile_opt = session_keyfile.lock().unwrap().clone();
                     if let Some(password) = password_opt {
                         trigger_vault_reload(
                             password,
+                            keyfile_opt,
                             window_weak.clone(),
                             Arc::clone(&vault_path),
                             Arc::clone(&metadata_store),
                             Arc::clone(&session_password),
+                            Arc::clone(&session_keyfile),
                             Arc::clone(&active_folder),
                             Arc::clone(&search_query),
                             Arc::clone(&use_multithreading),
@@ -2364,19 +2634,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let vault_path = Arc::clone(&vault_path);
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
         let use_multithreading = Arc::clone(&use_multithreading);
 
         move || {
             let password_opt = session_password.lock().unwrap().clone();
+            let keyfile_opt = session_keyfile.lock().unwrap().clone();
             if let Some(password) = password_opt {
                 trigger_vault_reload(
                     password,
+                    keyfile_opt,
                     window_weak.clone(),
                     Arc::clone(&vault_path),
                     Arc::clone(&metadata_store),
                     Arc::clone(&session_password),
+                    Arc::clone(&session_keyfile),
                     Arc::clone(&active_folder),
                     Arc::clone(&search_query),
                     Arc::clone(&use_multithreading),
@@ -2393,6 +2667,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
@@ -2401,6 +2676,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("[NoteVault] Vault locked.");
 
             *session_password.lock().unwrap() = None;
+            *session_keyfile.lock().unwrap() = None;
             metadata_store.lock().unwrap().clear();
             *active_folder.lock().unwrap() = "*All Notes*".to_string();
             *search_query.lock().unwrap() = String::new();
@@ -2416,6 +2692,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_content("".into());
             ui.set_search_query("".into());
             ui.set_unlock_password("".into());
+            ui.set_show_keyfile_browse(false);
             ui.set_vault_status_text("Vault locked".into());
             ui.set_has_unsaved_changes(false);
             ui.set_show_unsaved_warning(false);
@@ -2431,6 +2708,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let vault_path = Arc::clone(&vault_path);
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
@@ -2439,16 +2717,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let current_vault = vault_path.lock().unwrap().clone();
 
-            let password = {
+            let (password, keyfile_opt) = {
                 let session = session_password.lock().unwrap();
+                let keyfile = session_keyfile.lock().unwrap();
                 match session.as_ref() {
-                    Some(p) => p.clone(),
+                    Some(p) => (p.clone(), keyfile.clone()),
                     None => {
                         eprintln!("Error: Cannot save note, vault session is locked.");
                         return;
                     }
                 }
             };
+            let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
 
             let active_id = ui.get_active_note_id().to_string();
             let is_new = active_id.is_empty() || active_id == "new";
@@ -2510,7 +2790,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 let loaded_note = if existing_file_path.exists() {
-                    load_note_decrypted(&password, &existing_file_path).ok()
+                    load_note_decrypted(&password, kf_bytes, &existing_file_path).ok()
                 } else {
                     None
                 };
@@ -2543,7 +2823,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let saved_id = note.id.to_string();
             let updated_ts = note.updated_at;
 
-            if let Err(e) = save_note_encrypted(&note, &password, &target_path) {
+            if let Err(e) = save_note_encrypted(&note, &password, kf_bytes, &target_path) {
                 eprintln!("Error saving encrypted note to {:?}: {}", target_path, e);
                 return;
             }

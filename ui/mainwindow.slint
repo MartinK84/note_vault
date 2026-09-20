@@ -66,6 +66,7 @@ export component MainWindow inherits Window {
     in-out property <string> loading_status_text: "";
     in-out property <string> unlock_password: "";
     in-out property <string> unlock_error_message: "";
+    in-out property <bool> show_keyfile_browse: false;
 
     // --- Unsaved Changes Tracking ---
     in-out property <bool> has_unsaved_changes: false;
@@ -133,6 +134,15 @@ export component MainWindow inherits Window {
     in property <bool> is_reencrypting: false;
     in property <float> reencrypt_progress: 0.0;
 
+    // --- Keyfile Management State ---
+    in-out property <string> settings_keyfile_cur_pwd: "";
+    in-out property <string> settings_new_keyfile_path: "";
+    in-out property <bool> settings_remove_keyfile: false;
+    in property <string> keyfile_status: "";
+    in property <bool> keyfile_success: false;
+    in property <bool> is_keyfile_reencrypting: false;
+    in property <float> keyfile_reencrypt_progress: 0.0;
+
     // --- Export Vault Modal State ---
     in-out property <bool> show_export_modal: false;
     in-out property <string> export_path: "";
@@ -169,6 +179,9 @@ export component MainWindow inherits Window {
     callback save_settings_requested(string, bool, string, string, bool); // path, multithreading, theme, hotkey, minimize_to_tray
     callback browse_vault_path_requested();
     callback change_password_requested(string, string, string); // current, new, confirm
+    callback unlock_browse_keyfile_requested();
+    callback browse_new_keyfile_requested();
+    callback update_keyfile_requested(string, string, bool); // current, new_path, remove
     callback welcome_open_vault_requested(string);
     callback exit_requested();
     callback theme_changed(string);
@@ -1909,8 +1922,12 @@ export component MainWindow inherits Window {
     if root.is_locked && root.show_unlock_modal && !root.is_loading && !root.show_welcome_modal : UnlockModal {
         password <=> root.unlock_password;
         error_message: root.unlock_error_message;
+        show_keyfile_browse: root.show_keyfile_browse;
         unlock(pwd) => {
             root.unlock_requested(pwd);
+        }
+        browse_keyfile => {
+            root.unlock_browse_keyfile_requested();
         }
         close => {
             root.show_unlock_modal = false;
@@ -1947,6 +1964,13 @@ export component MainWindow inherits Window {
         password_change_success: root.password_change_success;
         is_reencrypting: root.is_reencrypting;
         reencrypt_progress: root.reencrypt_progress;
+        keyfile_current_password <=> root.settings_keyfile_cur_pwd;
+        new_keyfile_path <=> root.settings_new_keyfile_path;
+        remove_keyfile <=> root.settings_remove_keyfile;
+        keyfile_status: root.keyfile_status;
+        keyfile_success: root.keyfile_success;
+        is_keyfile_reencrypting: root.is_keyfile_reencrypting;
+        keyfile_reencrypt_progress: root.keyfile_reencrypt_progress;
 
         browse_path_clicked => {
             root.browse_vault_path_requested();
@@ -1956,6 +1980,12 @@ export component MainWindow inherits Window {
         }
         change_password(cur, new_pwd, confirm) => {
             root.change_password_requested(cur, new_pwd, confirm);
+        }
+        browse_new_keyfile => {
+            root.browse_new_keyfile_requested();
+        }
+        update_keyfile(cur, new_kf, rem_kf) => {
+            root.update_keyfile_requested(cur, new_kf, rem_kf);
         }
         theme_changed(theme) => {
             root.theme_changed(theme);

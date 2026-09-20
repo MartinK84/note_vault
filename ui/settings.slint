@@ -30,10 +30,21 @@ export component SettingsDialog inherits Rectangle {
     in property <bool> is_reencrypting: false;
     in property <float> reencrypt_progress: 0.0;
 
+    // Keyfile Management Properties
+    in-out property <string> keyfile_current_password: "";
+    in-out property <string> new_keyfile_path: "";
+    in-out property <bool> remove_keyfile: false;
+    in property <string> keyfile_status: "";
+    in property <bool> keyfile_success: false;
+    in property <bool> is_keyfile_reencrypting: false;
+    in property <float> keyfile_reencrypt_progress: 0.0;
+
     // Callbacks
     callback browse_path_clicked();
     callback save_settings(string, bool, string, string, bool);
     callback change_password(string, string, string);
+    callback browse_new_keyfile();
+    callback update_keyfile(string, string, bool);
     callback theme_changed(string);
     callback record_key_event(string, bool, bool, bool, bool) -> string;
     callback close_clicked();
@@ -417,6 +428,137 @@ export component SettingsDialog inherits Rectangle {
 
                         ProgressIndicator {
                             progress: root.reencrypt_progress;
+                        }
+                    }
+                }
+            }
+
+            // Section 4: Manage Keyfile Box
+            Rectangle {
+                background: Theme.bg_secondary;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.border;
+
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: "🔑 Manage Keyfile";
+                            font-size: 13px;
+                            font-weight: 700;
+                            color: Theme.text_primary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: "Adding or removing a keyfile will re-encrypt all notes. Keep your keyfile safe!";
+                        font-size: 11px;
+                        color: Theme.text_secondary;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        cross-axis-alignment: end;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 3px;
+
+                            Text {
+                                text: "Current Password";
+                                font-size: 11px;
+                                color: Theme.text_secondary;
+                            }
+
+                            LineEdit {
+                                text <=> root.keyfile_current_password;
+                                input-type: InputType.password;
+                                font-size: 12px;
+                                placeholder-text: "Current password...";
+                            }
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 2;
+                            spacing: 3px;
+
+                            Text {
+                                text: "New Keyfile";
+                                font-size: 11px;
+                                color: Theme.text_secondary;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 4px;
+
+                                LineEdit {
+                                    text: root.new_keyfile_path;
+                                    read-only: true;
+                                    font-size: 12px;
+                                    placeholder-text: root.remove_keyfile ? "Keyfile will be removed" : "Select keyfile...";
+                                    enabled: !root.remove_keyfile;
+                                    horizontal-stretch: 1;
+                                }
+
+                                Button {
+                                    text: "Browse...";
+                                    enabled: !root.remove_keyfile && !root.is_keyfile_reencrypting;
+                                    clicked => {
+                                        root.browse_new_keyfile();
+                                    }
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: end;
+                            padding-bottom: 6px;
+
+                            CheckBox {
+                                text: "Remove Keyfile";
+                                checked <=> root.remove_keyfile;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        Button {
+                            text: "Update Keyfile";
+                            enabled: !root.is_keyfile_reencrypting &&
+                                     root.keyfile_current_password != "" &&
+                                     ((root.new_keyfile_path != "" && !root.remove_keyfile) || root.remove_keyfile);
+                            clicked => {
+                                root.update_keyfile(root.keyfile_current_password, root.new_keyfile_path, root.remove_keyfile);
+                            }
+                        }
+
+                        if root.keyfile_status != "" : Text {
+                            text: root.keyfile_status;
+                            font-size: 11px;
+                            color: root.keyfile_success ? Theme.success : Theme.danger;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                    }
+
+                    if root.is_keyfile_reencrypting : VerticalLayout {
+                        spacing: 4px;
+
+                        ProgressIndicator {
+                            progress: root.keyfile_reencrypt_progress;
                         }
                     }
                 }

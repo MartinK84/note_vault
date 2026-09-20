@@ -6,9 +6,10 @@ A local-first, encrypted note-taking desktop application written in Rust. Notes 
 
 ### Encryption
 - Each note is stored as a separate `.vault` file. Files are independent of each other, so there are no merge conflicts during cloud sync and a corrupted file does not affect the rest of the vault.
-- **Key derivation:** [Argon2id](https://en.wikipedia.org/wiki/Argon2) with a unique random salt per file.
-- **Authenticated encryption:** [XChaCha20-Poly1305](https://en.wikipedia.org/wiki/ChaCha20-Poly1305) (AEAD) with a unique random nonce per file. Any tampering with the ciphertext is detected and rejected on decryption.
-- **Memory hygiene:** The [`zeroize`](https://crates.io/crates/zeroize) crate is used to overwrite master passwords, derived keys, and decrypted plaintext in memory as soon as they are no longer needed.
+- **Cryptographic Cascade (Defense in Depth):** Cascaded authenticated encryption combining **AES-256-GCM** (inner layer) and **XChaCha20-Poly1305** (outer layer). Both ciphers must be broken simultaneously to compromise note confidentiality.
+- **Key Derivation & Keyfile Support:** [Argon2id](https://en.wikipedia.org/wiki/Argon2) derives 64 bytes of key material (32 bytes for AES-256-GCM and 32 bytes for XChaCha20-Poly1305) with a unique 32-byte random salt per file. When a physical Keyfile is provided, its [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) hash is passed as a pepper (`secret`) into Argon2id, acting as a second factor against offline brute-force attacks.
+- **Backward Compatibility:** Seamlessly decrypts legacy format (`0x01` / 56-byte header with single XChaCha20-Poly1305) notes, automatically upgrading them to the cascaded version `0x02` upon the next save.
+- **Memory Hygiene:** The [`zeroize`](https://crates.io/crates/zeroize) crate is used to overwrite master passwords, keyfile buffers, derived keys, and decrypted plaintext in memory as soon as they are no longer needed.
 
 ### Desktop GUI (`note_vault`)
 - Three-panel layout: folder/category sidebar, note list, and editor.
@@ -16,6 +17,7 @@ A local-first, encrypted note-taking desktop application written in Rust. Notes 
 - Tags are stored as metadata inside each encrypted file and are searchable without decrypting the full note body (metadata is decrypted on load; content is only decrypted on demand).
 - Search across note titles and tags.
 - **Quick Search overlay** — a small floating window accessible via a configurable global hotkey (default `Shift+Space`). It shows the five most recently updated notes matching the query and lets you open one in the main window.
+- **Keyfile Management** — Easily add, change, or remove a keyfile from the Settings dialog with real-time atomic re-encryption of all notes. If a keyfile is moved or missing, the unlock dialog provides a direct file locator.
 - System tray icon with a context menu; the main window can be minimized to tray.
 - Note export to Markdown (with YAML front matter), plain text, and JSON.
 - Light and dark themes.
@@ -25,11 +27,11 @@ A companion command-line tool for scripting and automation:
 
 | Subcommand | Description |
 |------------|-------------|
-| `encrypt`  | Encrypts a plaintext file into a `.vault` file. |
-| `decrypt`  | Decrypts a `.vault` file back to plaintext. |
-| `info`     | Displays note metadata (ID, title, tags, timestamps) without printing the content. |
+| `encrypt`  | Encrypts a plaintext file into a `.vault` file (supports optional `--keyfile <FILE>`). |
+| `decrypt`  | Decrypts a `.vault` file back to plaintext (supports optional `--keyfile <FILE>`). |
+| `info`     | Displays note metadata (ID, title, tags, timestamps) without printing the content (supports optional `--keyfile <FILE>`). |
 
-Passwords are read securely from the terminal (no echo) using [`rpassword`](https://crates.io/crates/rpassword).
+Passphrases are read securely from the terminal (no echo) using [`rpassword`](https://crates.io/crates/rpassword).
 
 ## Configuration
 
@@ -38,6 +40,7 @@ On first run the GUI reads `config.json` from the working directory. An example 
 ```json
 {
   "vault_path": "C:\\Users\\you\\Documents\\vault",
+  "keyfile_path": null,
   "use_multithreading": true,
   "theme": "dark",
   "global_hotkey": "Shift+Space",
@@ -52,8 +55,9 @@ On first run the GUI reads `config.json` from the working directory. An example 
 | Key | Type | Description |
 |-----|------|-------------|
 | `vault_path` | string | Absolute path to the directory where `.vault` files are stored. |
+| `keyfile_path` | string \| `null` | Optional path to a physical keyfile used as a second factor. |
 | `use_multithreading` | bool | Load notes in parallel using Rayon. Useful for large vaults. |
-| `theme` | `"dark"` \| `"light"` | UI color theme. |
+| `theme` | `"dark"` \| `"light"` \| `"blue"` | UI color theme. |
 | `global_hotkey` | string | System-wide hotkey to show/hide the Quick Search window (e.g. `"Shift+Space"`, `"Control+Shift+N"`). |
 | `minimize_to_tray` | bool | Minimize the main window to the system tray instead of the taskbar. |
 | `editor_show_line_numbers` | bool | Show line numbers in the note editor. |

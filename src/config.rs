@@ -41,6 +41,9 @@ pub struct AppConfig {
     #[serde(default)]
     pub vault_path: String,
 
+    #[serde(default)]
+    pub keyfile_path: Option<String>,
+
     #[serde(default = "default_multithreading")]
     pub use_multithreading: bool,
 
@@ -70,6 +73,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             vault_path: String::new(),
+            keyfile_path: None,
             use_multithreading: true,
             theme: default_theme(),
             global_hotkey: default_global_hotkey(),
@@ -130,6 +134,7 @@ mod tests {
     fn test_default_config() {
         let config = AppConfig::default();
         assert_eq!(config.vault_path, "");
+        assert_eq!(config.keyfile_path, None);
         assert!(config.use_multithreading);
         assert_eq!(config.theme, "dark");
         assert_eq!(config.global_hotkey, "Shift+Space");
@@ -147,6 +152,7 @@ mod tests {
 
         let config = AppConfig {
             vault_path: "D:/MyVault".to_string(),
+            keyfile_path: Some("D:/MyVault/secret.key".to_string()),
             use_multithreading: false,
             theme: "light".to_string(),
             global_hotkey: "Control+Shift+N".to_string(),

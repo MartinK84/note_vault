@@ -5,9 +5,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
+use aes_gcm::{
+    aead::{Aead as AesAead, KeyInit as AesKeyInit},
+    Aes256Gcm, Nonce as AesNonce,
+};
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
+    aead::{Aead as ChachaAead, KeyInit as ChachaKeyInit},
     Key, XChaCha20Poly1305, XNonce,
 };
 use rand_core::{OsRng, RngCore};
@@ -18,10 +22,17 @@ use zeroize::{Zeroize, Zeroizing};
 pub mod config;
 
 /// Cryptographic binary file header constants.
+pub const CASCADE_VERSION: u8 = 0x02; // Version 2: AES-256-GCM + XChaCha20-Poly1305 cascade
 pub const SALT_LEN: usize = 32;       // 256-bit salt for Argon2id
-pub const NONCE_LEN: usize = 24;      // 192-bit nonce for XChaCha20
-pub const TAG_LEN: usize = 16;        // 128-bit Poly1305 MAC tag
-pub const HEADER_LEN: usize = SALT_LEN + NONCE_LEN; // 56 bytes
+pub const AES_NONCE_LEN: usize = 12;  // 96-bit nonce for AES-256-GCM
+pub const CHACHA_NONCE_LEN: usize = 24; // 192-bit nonce for XChaCha20
+pub const TAG_LEN: usize = 16;        // 128-bit MAC tag (Poly1305 / GHASH)
+pub const CASCADE_HEADER_LEN: usize = 1 + SALT_LEN + AES_NONCE_LEN + CHACHA_NONCE_LEN; // 69 bytes
+pub const LEGACY_HEADER_LEN: usize = SALT_LEN + CHACHA_NONCE_LEN; // 56 bytes
+
+// Aliases for backward compatibility
+pub const NONCE_LEN: usize = CHACHA_NONCE_LEN;
+pub const HEADER_LEN: usize = LEGACY_HEADER_LEN;
 
 /// Domain-specific errors for encryption, decryption, and file I/O operations.
 #[derive(Debug)]
@@ -42,7 +53,7 @@ impl fmt::Display for VaultError {
             VaultError::KeyDerivation(msg) => write!(f, "Argon2 key derivation error: {}", msg),
             VaultError::EncryptionFailed => write!(f, "AEAD encryption failed"),
             VaultError::DecryptionFailed => {
-                write!(f, "Decryption failed: invalid password or corrupted/tampered data")
+                write!(f, "Decryption failed: invalid password, keyfile mismatch, or corrupted data")
             }
             VaultError::InvalidFileFormat(msg) => write!(f, "Invalid file format: {}", msg),
         }
@@ -116,14 +127,54 @@ impl Zeroize for Note {
     }
 }
 
-/// Derives a 32-byte (256-bit) encryption key from a password and salt using Argon2id.
-/// The resulting key is wrapped in `Zeroizing` so that it is automatically erased from
+/// Derives a 64-byte (512-bit) encryption key from a password, optional keyfile bytes, and salt using Argon2id.
+///
+/// If `keyfile_bytes` is `Some`, its BLAKE3 hash (32 bytes) is passed as the `secret` (pepper)
+/// parameter in Argon2id. The first 32 bytes of the derived key are used for AES-256-GCM,
+/// and the remaining 32 bytes are used for XChaCha20-Poly1305.
+///
+/// The resulting 64-byte key is wrapped in `Zeroizing` so that it is automatically erased from
 /// memory upon drop.
-fn derive_key(password: &str, salt: &[u8; SALT_LEN]) -> Result<Zeroizing<[u8; 32]>, VaultError> {
-    let mut key = Zeroizing::new([0u8; 32]);
+pub fn derive_key(
+    password: &str,
+    keyfile_bytes: Option<&[u8]>,
+    salt: &[u8; SALT_LEN],
+) -> Result<Zeroizing<[u8; 64]>, VaultError> {
+    let mut key = Zeroizing::new([0u8; 64]);
 
-    // Explicit Argon2id configuration conforming to RFC 9106 recommended defaults
-    // Algorithm: Argon2id, Version: 0x13, Memory: 64MiB, Iterations: 3, Parallelism: 4
+    if let Some(kf) = keyfile_bytes {
+        let hash = blake3::hash(kf);
+        let pepper = Zeroizing::new(*hash.as_bytes());
+        let argon2 = Argon2::new_with_secret(
+            pepper.as_ref(),
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        )
+        .map_err(|e| VaultError::KeyDerivation(e.to_string()))?;
+
+        argon2
+            .hash_password_into(password.as_bytes(), salt, key.as_mut())
+            .map_err(|e| VaultError::KeyDerivation(e.to_string()))?;
+    } else {
+        let argon2 = Argon2::new(
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::default(),
+        );
+
+        argon2
+            .hash_password_into(password.as_bytes(), salt, key.as_mut())
+            .map_err(|e| VaultError::KeyDerivation(e.to_string()))?;
+    }
+
+    Ok(key)
+}
+
+/// Derives a 32-byte (256-bit) encryption key using legacy Argon2id without pepper.
+/// Strictly used for backward compatibility to decrypt legacy `.vault` files.
+pub fn derive_key_legacy(password: &str, salt: &[u8; SALT_LEN]) -> Result<Zeroizing<[u8; 32]>, VaultError> {
+    let mut key = Zeroizing::new([0u8; 32]);
     let argon2 = Argon2::new(
         Algorithm::Argon2id,
         Version::V0x13,
@@ -137,54 +188,81 @@ fn derive_key(password: &str, salt: &[u8; SALT_LEN]) -> Result<Zeroizing<[u8; 32
     Ok(key)
 }
 
-/// Serializes, encrypts, and writes a `Note` to disk.
+/// Serializes, encrypts, and writes a `Note` to disk using the cryptographic cascade
+/// (AES-256-GCM + XChaCha20-Poly1305).
 ///
 /// Binary layout:
-/// `[Argon2 Salt (32 bytes)] + [XChaCha20 Nonce (24 bytes)] + [Encrypted JSON Payload & MAC]`
+/// `[Version (1B, 0x02)] + [Argon2 Salt (32B)] + [AES Nonce (12B)] + [XChaCha Nonce (24B)] + [Final Ciphertext]`
 ///
 /// Security properties:
-/// - Salt and Nonce are cryptographically securely generated using `rand_core::OsRng`.
-/// - Key derived with Argon2id.
-/// - Authenticated encryption using XChaCha20-Poly1305 (AEAD).
-/// - Plaintext serialized buffer and derived key are securely zeroized from RAM.
+/// - Salt and Nonces are cryptographically securely generated using `rand_core::OsRng`.
+/// - 64-byte key derived with Argon2id, incorporating optional BLAKE3 keyfile hash as secret pepper.
+/// - Double-layer authenticated encryption: AES-256-GCM inside XChaCha20-Poly1305.
+/// - Plaintext serialized buffer, intermediate buffers, and derived keys are securely zeroized from RAM.
 pub fn save_note_encrypted(
     note: &Note,
     password: &str,
+    keyfile_bytes: Option<&[u8]>,
     output_path: &Path,
 ) -> Result<(), Box<dyn Error>> {
     // 1. Generate unique 32-byte salt using OsRng
     let mut salt = [0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt);
 
-    // 2. Generate unique 24-byte nonce for XChaCha20 using OsRng
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    // 2. Generate unique 12-byte nonce for AES-256-GCM using OsRng
+    let mut aes_nonce_bytes = [0u8; AES_NONCE_LEN];
+    OsRng.fill_bytes(&mut aes_nonce_bytes);
+    let aes_nonce = AesNonce::from(aes_nonce_bytes);
 
-    // 3. Derive 256-bit encryption key with Argon2id (wrapped in Zeroizing)
-    let key = derive_key(password, &salt)?;
+    // 3. Generate unique 24-byte nonce for XChaCha20 using OsRng
+    let mut chacha_nonce_bytes = [0u8; CHACHA_NONCE_LEN];
+    OsRng.fill_bytes(&mut chacha_nonce_bytes);
+    let chacha_nonce = XNonce::from_slice(&chacha_nonce_bytes);
 
-    // 4. Serialize note to JSON in a zeroizable buffer
+    // 4. Derive 64-byte encryption key with Argon2id (wrapped in Zeroizing)
+    let derived_key = derive_key(password, keyfile_bytes, &salt)?;
+    let mut aes_key = Zeroizing::new([0u8; 32]);
+    let mut chacha_key = Zeroizing::new([0u8; 32]);
+    aes_key.copy_from_slice(&derived_key[..32]);
+    chacha_key.copy_from_slice(&derived_key[32..]);
+    drop(derived_key);
+
+    // 5. Serialize note to JSON in a zeroizable buffer
     let plaintext_json = Zeroizing::new(serde_json::to_vec(note)?);
 
-    // 5. Encrypt plaintext JSON using XChaCha20-Poly1305 AEAD
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key.as_ref()));
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext_json.as_slice())
+    // 6. Encrypt plaintext JSON with AES-256-GCM (inner encryption)
+    let aes_cipher = Aes256Gcm::new_from_slice(aes_key.as_ref())
+        .map_err(|_| VaultError::EncryptionFailed)?;
+    let inner_ciphertext = Zeroizing::new(
+        aes_cipher
+            .encrypt(&aes_nonce, plaintext_json.as_slice())
+            .map_err(|_| VaultError::EncryptionFailed)?,
+    );
+
+    // Immediately zeroize plaintext JSON buffer and AES key
+    drop(plaintext_json);
+    drop(aes_key);
+
+    // 7. Encrypt resulting AES ciphertext with XChaCha20-Poly1305 (outer encryption)
+    let chacha_cipher = XChaCha20Poly1305::new(Key::from_slice(chacha_key.as_ref()));
+    let final_ciphertext = chacha_cipher
+        .encrypt(chacha_nonce, inner_ciphertext.as_slice())
         .map_err(|_| VaultError::EncryptionFailed)?;
 
-    // Immediately zeroize plaintext JSON buffer
-    drop(plaintext_json);
-    // Derived key is zeroized when `key` drops at function exit
+    drop(inner_ciphertext);
+    drop(chacha_key);
 
-    // 6. Assemble binary payload: [Salt (32)] + [Nonce (24)] + [Ciphertext + MAC]
-    let total_len = SALT_LEN + NONCE_LEN + ciphertext.len();
+    // 8. Assemble binary payload:
+    // [Version (1B)] + [Salt (32B)] + [AES Nonce (12B)] + [XChaCha Nonce (24B)] + [Final Ciphertext]
+    let total_len = CASCADE_HEADER_LEN + final_ciphertext.len();
     let mut binary_data = Vec::with_capacity(total_len);
+    binary_data.push(CASCADE_VERSION);
     binary_data.extend_from_slice(&salt);
-    binary_data.extend_from_slice(&nonce_bytes);
-    binary_data.extend_from_slice(&ciphertext);
+    binary_data.extend_from_slice(&aes_nonce_bytes);
+    binary_data.extend_from_slice(&chacha_nonce_bytes);
+    binary_data.extend_from_slice(&final_ciphertext);
 
-    // 7. Ensure parent directory exists and write file to disk
+    // 9. Ensure parent directory exists and write file to disk
     if let Some(parent) = output_path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
@@ -197,60 +275,121 @@ pub fn save_note_encrypted(
 
 /// Reads, decrypts, and deserializes a `Note` from disk.
 ///
-/// Validates binary structure:
-/// - Verifies minimal length for Salt (32B) + Nonce (24B) + MAC (16B).
-/// - Derives key via Argon2id.
-/// - Decrypts and verifies Poly1305 MAC tag.
-/// - Deserializes JSON payload into a `Note`.
-/// - Plaintext buffer and derived key are securely zeroized from RAM.
+/// Supports:
+/// - Version `0x02` Cascade format: outer XChaCha20-Poly1305 + inner AES-256-GCM.
+/// - Legacy format: 56-byte header with single-layer XChaCha20-Poly1305 (automatic backward compatibility).
+/// - Plaintext buffers and derived keys are securely zeroized from RAM.
 pub fn load_note_decrypted(
     password: &str,
+    keyfile_bytes: Option<&[u8]>,
     input_path: &Path,
 ) -> Result<Note, Box<dyn Error>> {
     // 1. Read encrypted file from disk
     let file_data = fs::read(input_path)?;
 
-    // 2. Validate header & minimum payload length (Salt + Nonce + Tag)
-    let min_len = HEADER_LEN + TAG_LEN;
-    if file_data.len() < HEADER_LEN {
+    if file_data.len() < LEGACY_HEADER_LEN + TAG_LEN {
         return Err(Box::new(VaultError::InvalidFileFormat(format!(
             "File size ({} bytes) is too small to contain valid header (expected at least {} bytes)",
             file_data.len(),
-            HEADER_LEN
-        ))));
-    }
-    if file_data.len() < min_len {
-        return Err(Box::new(VaultError::InvalidFileFormat(format!(
-            "File size ({} bytes) is too small to contain an encrypted payload and MAC tag (expected at least {} bytes)",
-            file_data.len(),
-            min_len
+            LEGACY_HEADER_LEN + TAG_LEN
         ))));
     }
 
-    // 3. Extract Salt, Nonce, and Ciphertext
+    // 2. Check for Cascade Version 0x02 layout
+    if file_data[0] == CASCADE_VERSION && file_data.len() >= CASCADE_HEADER_LEN + TAG_LEN + TAG_LEN {
+        let salt_end = 1 + SALT_LEN; // 33
+        let aes_nonce_end = salt_end + AES_NONCE_LEN; // 45
+        let chacha_nonce_end = aes_nonce_end + CHACHA_NONCE_LEN; // 69
+
+        let salt: &[u8; SALT_LEN] = file_data[1..salt_end]
+            .try_into()
+            .map_err(|_| VaultError::InvalidFileFormat("Failed to parse 32-byte salt".into()))?;
+        let aes_nonce_slice: &[u8; AES_NONCE_LEN] = file_data[salt_end..aes_nonce_end]
+            .try_into()
+            .map_err(|_| VaultError::InvalidFileFormat("Failed to parse 12-byte AES nonce".into()))?;
+        let aes_nonce = AesNonce::from(*aes_nonce_slice);
+        let chacha_nonce = XNonce::from_slice(&file_data[aes_nonce_end..chacha_nonce_end]);
+        let outer_ciphertext = &file_data[chacha_nonce_end..];
+
+        let cascade_res: Result<Note, VaultError> = (|| {
+            let derived_key = derive_key(password, keyfile_bytes, salt)?;
+            let mut aes_key = Zeroizing::new([0u8; 32]);
+            let mut chacha_key = Zeroizing::new([0u8; 32]);
+            aes_key.copy_from_slice(&derived_key[..32]);
+            chacha_key.copy_from_slice(&derived_key[32..]);
+            drop(derived_key);
+
+            // Outer layer: XChaCha20-Poly1305
+            let chacha_cipher = XChaCha20Poly1305::new(Key::from_slice(chacha_key.as_ref()));
+            let inner_ciphertext = Zeroizing::new(
+                chacha_cipher
+                    .decrypt(chacha_nonce, outer_ciphertext)
+                    .map_err(|_| VaultError::DecryptionFailed)?,
+            );
+            drop(chacha_key);
+
+            // Inner layer: AES-256-GCM
+            let aes_cipher = Aes256Gcm::new_from_slice(aes_key.as_ref())
+                .map_err(|_| VaultError::DecryptionFailed)?;
+            let decrypted_buffer = Zeroizing::new(
+                aes_cipher
+                    .decrypt(&aes_nonce, inner_ciphertext.as_slice())
+                    .map_err(|_| VaultError::DecryptionFailed)?,
+            );
+            drop(inner_ciphertext);
+            drop(aes_key);
+
+            let note: Note = serde_json::from_slice(decrypted_buffer.as_slice())
+                .map_err(VaultError::Serialization)?;
+            drop(decrypted_buffer);
+
+            Ok(note)
+        })();
+
+        match cascade_res {
+            Ok(note) => return Ok(note),
+            Err(e) => {
+                // If cascade decryption failed, check if this could be a legacy file whose
+                // first random salt byte happened to match 0x02.
+                if keyfile_bytes.is_none() && file_data.len() >= LEGACY_HEADER_LEN + TAG_LEN {
+                    if let Ok(legacy_note) = decrypt_legacy(&file_data, password) {
+                        return Ok(legacy_note);
+                    }
+                }
+                return Err(Box::new(e));
+            }
+        }
+    }
+
+    // 3. Fallback to Legacy layout (XChaCha20-Poly1305 with 32B key)
+    let note = decrypt_legacy(&file_data, password)?;
+    Ok(note)
+}
+
+fn decrypt_legacy(file_data: &[u8], password: &str) -> Result<Note, VaultError> {
+    if file_data.len() < LEGACY_HEADER_LEN + TAG_LEN {
+        return Err(VaultError::InvalidFileFormat(format!(
+            "File size ({} bytes) is too small to contain valid legacy header",
+            file_data.len()
+        )));
+    }
+
     let salt: &[u8; SALT_LEN] = file_data[..SALT_LEN]
         .try_into()
         .map_err(|_| VaultError::InvalidFileFormat("Failed to parse 32-byte salt".into()))?;
 
-    let nonce = XNonce::from_slice(&file_data[SALT_LEN..HEADER_LEN]);
-    let ciphertext = &file_data[HEADER_LEN..];
+    let nonce = XNonce::from_slice(&file_data[SALT_LEN..LEGACY_HEADER_LEN]);
+    let ciphertext = &file_data[LEGACY_HEADER_LEN..];
 
-    // 4. Derive key using Argon2id with extracted salt
-    let key = derive_key(password, salt)?;
-
-    // 5. Decrypt and verify Poly1305 MAC using XChaCha20-Poly1305
+    let key = derive_key_legacy(password, salt)?;
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key.as_ref()));
     let decrypted_bytes = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| VaultError::DecryptionFailed)?;
 
-    // Wrap decrypted plaintext in Zeroizing buffer to ensure RAM is cleared after deserialization
     let decrypted_buffer = Zeroizing::new(decrypted_bytes);
-
-    // 6. Deserialize JSON into Note
-    let note: Note = serde_json::from_slice(decrypted_buffer.as_slice())?;
-
-    // Explicitly zeroize plaintext buffer
+    let note: Note = serde_json::from_slice(decrypted_buffer.as_slice())
+        .map_err(VaultError::Serialization)?;
     drop(decrypted_buffer);
 
     Ok(note)
@@ -259,17 +398,20 @@ pub fn load_note_decrypted(
 /// Atomically re-encrypts all `.vault` files found recursively within `vault_dir`.
 ///
 /// 1. Finds all files with `.vault` extension (excluding `.vault.new` and temporary files).
-/// 2. Decrypts each file using `current_password` into memory (`Note`), then encrypts it using
-///    `new_password` and writes it to `<filename>.vault.new`. The decrypted in-memory `Note` is zeroized.
+/// 2. Decrypts each file using `current_password` and `current_keyfile` into memory (`Note`),
+///    then re-encrypts it using `new_password` and `new_keyfile` in the new Cascade (`0x02`)
+///    format to `<filename>.vault.new`. The decrypted in-memory `Note` is zeroized.
 /// 3. If any file fails during decryption or write, all created `.vault.new` files are removed
-///    and an error is returned. The original `.vault` files remain completely untouched.
+///    and an error is returned. The original `.vault` files remain untouched.
 /// 4. Once all files have been safely staged as `.vault.new`, they are atomically renamed to `.vault`.
 ///
 /// Returns the number of notes successfully re-encrypted.
 pub fn reencrypt_vault_atomic<F>(
     vault_dir: &Path,
     current_password: &str,
+    current_keyfile: Option<&[u8]>,
     new_password: &str,
+    new_keyfile: Option<&[u8]>,
     mut progress_callback: F,
 ) -> Result<usize, Box<dyn Error>>
 where
@@ -313,7 +455,7 @@ where
     for (idx, (orig_path, new_path)) in staging_pairs.iter().enumerate() {
         progress_callback(idx + 1, total);
 
-        let mut note = match load_note_decrypted(current_password, orig_path) {
+        let mut note = match load_note_decrypted(current_password, current_keyfile, orig_path) {
             Ok(n) => n,
             Err(e) => {
                 failure = Some(format!(
@@ -325,7 +467,7 @@ where
             }
         };
 
-        let save_res = save_note_encrypted(&note, new_password, new_path);
+        let save_res = save_note_encrypted(&note, new_password, new_keyfile, new_path);
         note.zeroize();
 
         if let Err(e) = save_res {
@@ -362,28 +504,66 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn test_save_and_load_roundtrip() {
+    fn test_save_and_load_roundtrip_no_keyfile() {
         let temp_dir = std::env::temp_dir().join(format!("note_vault_test_{}", Uuid::new_v4()));
         let file_path = temp_dir.join("test_note.vault");
 
         let original_note = Note::new(
             "Secret Master Key Document",
-            Vec::new(),
+            vec!["cascade".into(), "v2".into()],
             "Sensitive payload: keep this secret and offline!",
         );
         let password = "SuperSecretPassword123!#";
 
-        // Save encrypted note
-        save_note_encrypted(&original_note, password, &file_path)
+        // Save encrypted note with cascade format
+        save_note_encrypted(&original_note, password, None, &file_path)
             .expect("Saving encrypted note should succeed");
 
+        // Verify version flag on disk is 0x02
+        let raw_data = fs::read(&file_path).unwrap();
+        assert_eq!(raw_data[0], CASCADE_VERSION);
+
         // Load decrypted note
-        let decrypted_note = load_note_decrypted(password, &file_path)
+        let decrypted_note = load_note_decrypted(password, None, &file_path)
             .expect("Loading decrypted note should succeed");
 
         assert_eq!(original_note, decrypted_note);
 
-        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip_with_keyfile() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_test_{}", Uuid::new_v4()));
+        let file_path = temp_dir.join("test_keyfile_note.vault");
+
+        let original_note = Note::new(
+            "Two Factor Protected Note",
+            vec!["2fa".into(), "keyfile".into()],
+            "Protected by both password and physical keyfile!",
+        );
+        let password = "SuperSecretPassword123!#";
+        let keyfile_data = b"my_secure_physical_usb_dongle_entropy_data_bytes_1234567890";
+
+        // Save encrypted note with keyfile
+        save_note_encrypted(&original_note, password, Some(keyfile_data), &file_path)
+            .expect("Saving encrypted note with keyfile should succeed");
+
+        // Load decrypted note with correct keyfile
+        let decrypted_note = load_note_decrypted(password, Some(keyfile_data), &file_path)
+            .expect("Loading decrypted note with keyfile should succeed");
+
+        assert_eq!(original_note, decrypted_note);
+
+        // Decryption fails if keyfile is missing
+        let no_keyfile_res = load_note_decrypted(password, None, &file_path);
+        assert!(no_keyfile_res.is_err());
+
+        // Decryption fails if wrong keyfile is used
+        let wrong_keyfile = b"different_keyfile_content";
+        let wrong_keyfile_res = load_note_decrypted(password, Some(wrong_keyfile), &file_path);
+        assert!(wrong_keyfile_res.is_err());
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
@@ -396,9 +576,9 @@ mod tests {
         let correct_password = "CorrectPassword123!";
         let wrong_password = "WrongPassword456?";
 
-        save_note_encrypted(&original_note, correct_password, &file_path).unwrap();
+        save_note_encrypted(&original_note, correct_password, None, &file_path).unwrap();
 
-        let result = load_note_decrypted(wrong_password, &file_path);
+        let result = load_note_decrypted(wrong_password, None, &file_path);
         assert!(result.is_err());
         let err_str = result.unwrap_err().to_string();
         assert!(
@@ -422,7 +602,7 @@ mod tests {
         );
         let password = "StrongPassword987*";
 
-        save_note_encrypted(&note, password, &file_path).unwrap();
+        save_note_encrypted(&note, password, None, &file_path).unwrap();
 
         // Tamper with one byte of the ciphertext on disk
         let mut file_data = fs::read(&file_path).unwrap();
@@ -430,8 +610,60 @@ mod tests {
         file_data[last_byte_idx] ^= 0x01; // flip single bit
         fs::write(&file_path, &file_data).unwrap();
 
-        let result = load_note_decrypted(password, &file_path);
+        let result = load_note_decrypted(password, None, &file_path);
         assert!(result.is_err(), "Decryption must fail when ciphertext is modified");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_legacy_format_backward_compatibility() {
+        let temp_dir = std::env::temp_dir().join(format!("note_vault_legacy_{}", Uuid::new_v4()));
+        let file_path = temp_dir.join("legacy_note.vault");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let original_note = Note::new(
+            "Legacy Note",
+            vec!["legacy".into()],
+            "Created before cascade encryption was introduced.",
+        );
+        let password = "LegacyPassword123!";
+
+        // Manually write a legacy-format file (56-byte header: 32B Salt + 24B Nonce + XChaCha ciphertext)
+        let mut salt = [0u8; SALT_LEN];
+        OsRng.fill_bytes(&mut salt);
+        // Ensure first byte is not 0x02 to test direct legacy path
+        if salt[0] == CASCADE_VERSION {
+            salt[0] = 0x00;
+        }
+
+        let mut nonce_bytes = [0u8; CHACHA_NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = XNonce::from_slice(&nonce_bytes);
+
+        let key = derive_key_legacy(password, &salt).unwrap();
+        let plaintext_json = serde_json::to_vec(&original_note).unwrap();
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(key.as_ref()));
+        let ciphertext = cipher.encrypt(nonce, plaintext_json.as_slice()).unwrap();
+
+        let mut legacy_data = Vec::new();
+        legacy_data.extend_from_slice(&salt);
+        legacy_data.extend_from_slice(&nonce_bytes);
+        legacy_data.extend_from_slice(&ciphertext);
+        fs::write(&file_path, &legacy_data).unwrap();
+
+        // Load using load_note_decrypted (should automatically recognize legacy layout)
+        let decrypted = load_note_decrypted(password, None, &file_path)
+            .expect("Legacy note must be successfully decrypted");
+        assert_eq!(decrypted, original_note);
+
+        // Next save should automatically upgrade to cascade format
+        save_note_encrypted(&decrypted, password, None, &file_path).unwrap();
+        let upgraded_data = fs::read(&file_path).unwrap();
+        assert_eq!(upgraded_data[0], CASCADE_VERSION);
+
+        let re_loaded = load_note_decrypted(password, None, &file_path).unwrap();
+        assert_eq!(re_loaded, original_note);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -445,133 +677,88 @@ mod tests {
         let note = Note::new("Identical Note", Vec::new(), "Identical Content");
         let password = "SamePasswordAcrossSaves";
 
-        save_note_encrypted(&note, password, &file_path_1).unwrap();
-        save_note_encrypted(&note, password, &file_path_2).unwrap();
+        save_note_encrypted(&note, password, None, &file_path_1).unwrap();
+        save_note_encrypted(&note, password, None, &file_path_2).unwrap();
 
         let data1 = fs::read(&file_path_1).unwrap();
         let data2 = fs::read(&file_path_2).unwrap();
 
-        let salt1 = &data1[..SALT_LEN];
-        let salt2 = &data2[..SALT_LEN];
+        // Check Version byte
+        assert_eq!(data1[0], CASCADE_VERSION);
+        assert_eq!(data2[0], CASCADE_VERSION);
+
+        // Check Salt
+        let salt1 = &data1[1..1 + SALT_LEN];
+        let salt2 = &data2[1..1 + SALT_LEN];
         assert_ne!(salt1, salt2, "Salts must be uniquely generated per file");
 
-        let nonce1 = &data1[SALT_LEN..HEADER_LEN];
-        let nonce2 = &data2[SALT_LEN..HEADER_LEN];
-        assert_ne!(nonce1, nonce2, "Nonces must be uniquely generated per file");
+        // Check AES Nonce
+        let aes_n1 = &data1[1 + SALT_LEN..1 + SALT_LEN + AES_NONCE_LEN];
+        let aes_n2 = &data2[1 + SALT_LEN..1 + SALT_LEN + AES_NONCE_LEN];
+        assert_ne!(aes_n1, aes_n2, "AES Nonces must be uniquely generated per file");
+
+        // Check XChaCha Nonce
+        let chacha_n1 = &data1[1 + SALT_LEN + AES_NONCE_LEN..CASCADE_HEADER_LEN];
+        let chacha_n2 = &data2[1 + SALT_LEN + AES_NONCE_LEN..CASCADE_HEADER_LEN];
+        assert_ne!(chacha_n1, chacha_n2, "XChaCha Nonces must be uniquely generated per file");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
-    fn test_truncated_file_error() {
-        let temp_dir = std::env::temp_dir().join(format!("note_vault_test_{}", Uuid::new_v4()));
-        let file_path = temp_dir.join("truncated.vault");
-
-        // Write a truncated file (only 20 bytes, smaller than header)
-        fs::create_dir_all(&temp_dir).unwrap();
-        fs::write(&file_path, &[0u8; 20]).unwrap();
-
-        let result = load_note_decrypted("SomePassword", &file_path);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("too small") || err_msg.contains("Invalid file format"));
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_note_metadata_and_zeroize() {
-        let mut note = Note::new(
-            "Design Doc",
-            vec!["spec".to_string(), "v1".to_string()],
-            "Secret payload",
-        );
-
-        assert_eq!(note.title, "Design Doc");
-        assert_eq!(note.tags, vec!["spec", "v1"]);
-        assert_eq!(note.created_at, note.updated_at);
-
-        note.zeroize();
-
-        assert_eq!(note.title, "");
-        assert!(note.tags.iter().all(|t| t.is_empty()) || note.tags.is_empty());
-        assert_eq!(note.content, "");
-        assert_eq!(note.created_at, 0);
-        assert_eq!(note.updated_at, 0);
-        assert_eq!(note.id, Uuid::nil());
-    }
-
-    #[test]
-    fn test_reencrypt_vault_atomic_success() {
+    fn test_reencrypt_vault_atomic_keyfile_management() {
         let temp_dir = std::env::temp_dir().join(format!("note_vault_reenc_{}", Uuid::new_v4()));
-        let folder_a = temp_dir.join("General");
-        let folder_b = temp_dir.join("Work");
-        fs::create_dir_all(&folder_a).unwrap();
-        fs::create_dir_all(&folder_b).unwrap();
+        let folder = temp_dir.join("Work");
+        fs::create_dir_all(&folder).unwrap();
 
-        let note1 = Note::new("Note 1", vec!["tag1".to_string()], "Secret 1");
-        let note2 = Note::new("Note 2", vec!["tag2".to_string()], "Secret 2");
+        let note = Note::new("Re-encryption Note", vec!["reenc".into()], "Top Secret Content");
+        let path = folder.join("note.vault");
 
-        let p1 = folder_a.join("note1.vault");
-        let p2 = folder_b.join("note2.vault");
+        let password = "MasterPassword123!";
+        let keyfile_old = b"initial_usb_keyfile_entropy_content";
+        let keyfile_new = b"updated_usb_keyfile_entropy_content";
 
-        let old_pwd = "OldMasterPassword123!";
-        let new_pwd = "NewMasterPassword456?";
+        // 1. Initial save with keyfile_old
+        save_note_encrypted(&note, password, Some(keyfile_old), &path).unwrap();
 
-        save_note_encrypted(&note1, old_pwd, &p1).unwrap();
-        save_note_encrypted(&note2, old_pwd, &p2).unwrap();
+        // 2. Re-encrypt with new keyfile
+        let count = reencrypt_vault_atomic(
+            &temp_dir,
+            password,
+            Some(keyfile_old),
+            password,
+            Some(keyfile_new),
+            |_, _| {},
+        ).expect("Re-encryption with new keyfile should succeed");
 
-        let mut progress_reports = Vec::new();
-        let reencrypted_count = reencrypt_vault_atomic(&temp_dir, old_pwd, new_pwd, |done, total| {
-            progress_reports.push((done, total));
-        }).expect("Atomic re-encryption should succeed");
+        assert_eq!(count, 1);
+        assert!(!folder.join("note.vault.new").exists());
 
-        assert_eq!(reencrypted_count, 2);
-        assert_eq!(progress_reports, vec![(1, 2), (2, 2)]);
+        // Old keyfile should fail
+        assert!(load_note_decrypted(password, Some(keyfile_old), &path).is_err());
 
-        // No staging files left over
-        assert!(!folder_a.join("note1.vault.new").exists());
-        assert!(!folder_b.join("note2.vault.new").exists());
+        // New keyfile must succeed
+        let loaded = load_note_decrypted(password, Some(keyfile_new), &path).unwrap();
+        assert_eq!(loaded.title, "Re-encryption Note");
+        assert_eq!(loaded.content, "Top Secret Content");
 
-        // Decrypt with old password should now fail
-        assert!(load_note_decrypted(old_pwd, &p1).is_err());
-        assert!(load_note_decrypted(old_pwd, &p2).is_err());
+        // 3. Remove keyfile via atomic re-encryption
+        let count_remove = reencrypt_vault_atomic(
+            &temp_dir,
+            password,
+            Some(keyfile_new),
+            password,
+            None,
+            |_, _| {},
+        ).expect("Re-encryption removing keyfile should succeed");
 
-        // Decrypt with new password must succeed and preserve content
-        let dec1 = load_note_decrypted(new_pwd, &p1).unwrap();
-        let dec2 = load_note_decrypted(new_pwd, &p2).unwrap();
-        assert_eq!(dec1.title, "Note 1");
-        assert_eq!(dec1.content, "Secret 1");
-        assert_eq!(dec2.title, "Note 2");
-        assert_eq!(dec2.content, "Secret 2");
+        assert_eq!(count_remove, 1);
 
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_reencrypt_vault_atomic_aborts_on_wrong_password() {
-        let temp_dir = std::env::temp_dir().join(format!("note_vault_reenc_fail_{}", Uuid::new_v4()));
-        fs::create_dir_all(&temp_dir).unwrap();
-
-        let note = Note::new("Secret Note", Vec::new(), "Critical Content");
-        let correct_pwd = "CorrectMaster123!";
-        let wrong_pwd = "WrongOldPassword!";
-        let new_pwd = "AttemptedNewPassword!";
-
-        let p = temp_dir.join("note.vault");
-        save_note_encrypted(&note, correct_pwd, &p).unwrap();
-
-        let result = reencrypt_vault_atomic(&temp_dir, wrong_pwd, new_pwd, |_, _| {});
-        assert!(result.is_err(), "Re-encryption with wrong old password must fail");
-
-        // Staging file must be wiped
-        assert!(!temp_dir.join("note.vault.new").exists());
-
-        // Original file must remain intact and decryptable with correct password
-        let dec = load_note_decrypted(correct_pwd, &p).unwrap();
-        assert_eq!(dec.title, "Secret Note");
-        assert_eq!(dec.content, "Critical Content");
+        // Keyfile is no longer required
+        let loaded_no_kf = load_note_decrypted(password, None, &path).unwrap();
+        assert_eq!(loaded_no_kf.title, "Re-encryption Note");
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }
+

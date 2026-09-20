@@ -31,6 +31,10 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         output: PathBuf,
 
+        /// Optional path to physical keyfile (second factor)
+        #[arg(short, long, value_name = "KEYFILE")]
+        keyfile: Option<PathBuf>,
+
         /// Optional tags for the note (can be specified multiple times or comma-separated)
         #[arg(short, long, value_delimiter = ',', num_args = 1..)]
         tags: Vec<String>,
@@ -44,13 +48,32 @@ enum Commands {
         /// Destination path to save the decrypted plaintext content
         #[arg(short, long, value_name = "FILE")]
         output: PathBuf,
+
+        /// Optional path to physical keyfile (second factor)
+        #[arg(short, long, value_name = "KEYFILE")]
+        keyfile: Option<PathBuf>,
     },
     /// Display metadata of an encrypted .vault file without revealing its content
     Info {
         /// Path to the encrypted .vault file
         #[arg(short, long, value_name = "FILE")]
         input: PathBuf,
+
+        /// Optional path to physical keyfile (second factor)
+        #[arg(short, long, value_name = "KEYFILE")]
+        keyfile: Option<PathBuf>,
     },
+}
+
+fn read_keyfile(keyfile_path: Option<&PathBuf>) -> Result<Option<Zeroizing<Vec<u8>>>, Box<dyn Error>> {
+    match keyfile_path {
+        Some(path) => {
+            let data = fs::read(path)
+                .map_err(|e| format!("Failed to read keyfile '{}': {}", path.display(), e))?;
+            Ok(Some(Zeroizing::new(data)))
+        }
+        None => Ok(None),
+    }
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
@@ -68,6 +91,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         Commands::Encrypt {
             input,
             output,
+            keyfile,
             tags,
         } => {
             // 1. Verify input file exists
@@ -91,6 +115,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
 
             let note = Note::new(title, tags, content);
 
+            // 4. Read optional keyfile
+            let keyfile_buf = read_keyfile(keyfile.as_ref())?;
+
             // 5. Securely prompt for password without terminal echo and wrap in Zeroizing
             let password_str = rpassword::prompt_password("Enter password to encrypt note: ")
                 .map_err(|e| format!("Failed to read password: {}", e))?;
@@ -101,8 +128,13 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             }
 
             // 6. Encrypt and save note to target destination
-            save_note_encrypted(&note, &password, &output)
-                .map_err(|e| format!("Encryption failed: {}", e))?;
+            save_note_encrypted(
+                &note,
+                &password,
+                keyfile_buf.as_deref().map(|b| b.as_slice()),
+                &output,
+            )
+            .map_err(|e| format!("Encryption failed: {}", e))?;
 
             println!(
                 "Successfully encrypted '{}' to '{}'.",
@@ -110,7 +142,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 output.display()
             );
         }
-        Commands::Decrypt { input, output } => {
+        Commands::Decrypt { input, output, keyfile } => {
             // 1. Verify encrypted vault file exists
             if !input.exists() {
                 return Err(format!("Encrypted vault file not found: '{}'", input.display()).into());
@@ -120,7 +152,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 return Err(format!("Input path is not a file: '{}'", input.display()).into());
             }
 
-            // 2. Securely prompt for password without terminal echo and wrap in Zeroizing
+            // 2. Read optional keyfile
+            let keyfile_buf = read_keyfile(keyfile.as_ref())?;
+
+            // 3. Securely prompt for password without terminal echo and wrap in Zeroizing
             let password_str = rpassword::prompt_password("Enter vault password: ")
                 .map_err(|e| format!("Failed to read password: {}", e))?;
 
@@ -129,11 +164,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 return Err("Password cannot be empty.".into());
             }
 
-            // 3. Decrypt and verify note integrity
-            let note = load_note_decrypted(&password, &input)
-                .map_err(|e| format!("Decryption failed: {}", e))?;
+            // 4. Decrypt and verify note integrity
+            let note = load_note_decrypted(
+                &password,
+                keyfile_buf.as_deref().map(|b| b.as_slice()),
+                &input,
+            )
+            .map_err(|e| format!("Decryption failed: {}", e))?;
 
-            // 4. Ensure destination parent directory exists if necessary
+            // 5. Ensure destination parent directory exists if necessary
             if let Some(parent) = output.parent() {
                 if !parent.as_os_str().is_empty() {
                     fs::create_dir_all(parent).map_err(|e| {
@@ -142,7 +181,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            // 5. Write decrypted plaintext content to output path
+            // 6. Write decrypted plaintext content to output path
             fs::write(&output, note.content.as_bytes())
                 .map_err(|e| format!("Failed to write decrypted content to '{}': {}", output.display(), e))?;
 
@@ -153,7 +192,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 output.display()
             );
         }
-        Commands::Info { input } => {
+        Commands::Info { input, keyfile } => {
             // 1. Verify encrypted vault file exists
             if !input.exists() {
                 return Err(format!("Encrypted vault file not found: '{}'", input.display()).into());
@@ -163,7 +202,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 return Err(format!("Input path is not a file: '{}'", input.display()).into());
             }
 
-            // 2. Securely prompt for password without terminal echo and wrap in Zeroizing
+            // 2. Read optional keyfile
+            let keyfile_buf = read_keyfile(keyfile.as_ref())?;
+
+            // 3. Securely prompt for password without terminal echo and wrap in Zeroizing
             let password_str = rpassword::prompt_password("Enter vault password: ")
                 .map_err(|e| format!("Failed to read password: {}", e))?;
 
@@ -172,11 +214,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 return Err("Password cannot be empty.".into());
             }
 
-            // 3. Decrypt note metadata
-            let note = load_note_decrypted(&password, &input)
-                .map_err(|e| format!("Decryption failed: {}", e))?;
+            // 4. Decrypt note metadata
+            let note = load_note_decrypted(
+                &password,
+                keyfile_buf.as_deref().map(|b| b.as_slice()),
+                &input,
+            )
+            .map_err(|e| format!("Decryption failed: {}", e))?;
 
-            // 4. Display ONLY metadata (CRITICAL: content is never printed)
+            // 5. Display ONLY metadata (CRITICAL: content is never printed)
             println!("=== Vault Note Metadata ===");
             println!("ID:          {}", note.id);
             println!("Title:       {}", note.title);
