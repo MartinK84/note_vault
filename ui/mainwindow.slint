@@ -1394,7 +1394,7 @@ export component MainWindow inherits Window {
                                     clicked => {
                                         root.editor_line_wrap = !root.editor_line_wrap;
                                         if root.editor_line_wrap {
-                                            editor_scroll.viewport-x = 0px;
+                                            editor_scroll.content-x = 0px;
                                         }
                                         root.editor_setting_changed("line_wrap", root.editor_line_wrap ? "true" : "false");
                                     }
@@ -1686,7 +1686,7 @@ export component MainWindow inherits Window {
 
                                     Text {
                                         x: 0px;
-                                        y: editor_scroll.viewport-y + 14px;
+                                        y: editor_scroll.content-y + 14px;
                                         width: parent.width - 10px;
                                         text: root.line_numbers_text;
                                         font-size: root.editor_font_size * 1px;
@@ -1700,8 +1700,8 @@ export component MainWindow inherits Window {
                             // Main Editor Scrollable Area
                             editor_scroll := ScrollView {
                                 horizontal-stretch: 1;
-                                viewport-width: root.editor_line_wrap ? self.visible-width : max(self.visible-width, editor_input.preferred-width + 28px);
-                                viewport-height: max(self.visible-height, editor_input.preferred-height + 28px);
+                                content-width: root.editor_line_wrap ? self.visible-width : max(self.visible-width, editor_input.preferred-width + 28px);
+                                content-height: max(self.visible-height, editor_input.preferred-height + 28px);
 
                                 Rectangle {
                                     width: root.editor_line_wrap ? editor_scroll.visible-width : max(editor_scroll.visible-width, editor_input.preferred-width + 28px);
@@ -1739,23 +1739,23 @@ export component MainWindow inherits Window {
                                             root.current_line_y = cpos.y;
 
                                             if !root.editor_line_wrap {
-                                                if (cpos.x + editor_scroll.viewport-x < 0px) {
-                                                    editor_scroll.viewport-x = min(0px, max(editor_scroll.visible-width - self.width, -cpos.x));
-                                                } else if (cpos.x + editor_scroll.viewport-x > editor_scroll.visible-width) {
-                                                    editor_scroll.viewport-x = min(0px, max(editor_scroll.visible-width - self.width, editor_scroll.visible-width - cpos.x));
+                                                if (cpos.x + editor_scroll.content-x < 0px) {
+                                                    editor_scroll.content-x = min(0px, max(editor_scroll.visible-width - self.width, -cpos.x));
+                                                } else if (cpos.x + editor_scroll.content-x > editor_scroll.visible-width) {
+                                                    editor_scroll.content-x = min(0px, max(editor_scroll.visible-width - self.width, editor_scroll.visible-width - cpos.x));
                                                 }
                                             } else {
-                                                editor_scroll.viewport-x = 0px;
+                                                editor_scroll.content-x = 0px;
                                             }
 
-                                            if (cpos.y + editor_scroll.viewport-y < 0px) {
-                                                editor_scroll.viewport-y = min(
+                                            if (cpos.y + editor_scroll.content-y < 0px) {
+                                                editor_scroll.content-y = min(
                                                     0px,
                                                     editor_scroll.visible-height - cpos.y - (root.editor_font_size * 1.4 * 1px),
                                                     max(editor_scroll.visible-height - self.height, -cpos.y),
                                                 );
-                                            } else if (cpos.y + editor_scroll.viewport-y > editor_scroll.visible-height - (root.editor_font_size * 1.4 * 1px)) {
-                                                editor_scroll.viewport-y = min(
+                                            } else if (cpos.y + editor_scroll.content-y > editor_scroll.visible-height - (root.editor_font_size * 1.4 * 1px)) {
+                                                editor_scroll.content-y = min(
                                                     0px,
                                                     max(editor_scroll.visible-height - self.height, editor_scroll.visible-height - cpos.y - (root.editor_font_size * 1.4 * 1px))
                                                 );
