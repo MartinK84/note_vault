@@ -1123,7 +1123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session_password: Arc<Mutex<Option<Zeroizing<String>>>> = Arc::new(Mutex::new(None));
     let metadata_store: Arc<Mutex<HashMap<String, NoteMetaSummary>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("General".to_string()));
+    let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("*All Notes*".to_string()));
     let search_query: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     // Slint Windows: Main, QuickSearch, QuickViewer
@@ -1536,7 +1536,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         main_window.set_vault_status_text("Vault locked".into());
     }
 
-    main_window.set_active_folder("General".into());
+    main_window.set_active_folder("*All Notes*".into());
     main_window.set_note_category("General".into());
 
     // -------------------------------------------------------------
@@ -1919,14 +1919,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Lock vault on folder switch
                 *session_password.lock().unwrap() = None;
                 metadata_store.lock().unwrap().clear();
-                *active_folder.lock().unwrap() = "General".to_string();
+                *active_folder.lock().unwrap() = "*All Notes*".to_string();
                 *search_query.lock().unwrap() = String::new();
 
                 ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());
                 ui.set_current_notes(std::rc::Rc::new(slint::VecModel::default()).into());
                 ui.set_active_note_id("".into());
                 ui.set_note_title("".into());
-                ui.set_active_folder("General".into());
+                ui.set_active_folder("*All Notes*".into());
                 ui.set_note_category("General".into());
                 ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                 ui.set_note_date("".into());
@@ -2347,14 +2347,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             *session_password.lock().unwrap() = None;
             metadata_store.lock().unwrap().clear();
-            *active_folder.lock().unwrap() = "General".to_string();
+            *active_folder.lock().unwrap() = "*All Notes*".to_string();
             *search_query.lock().unwrap() = String::new();
 
             ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_current_notes(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_active_note_id("".into());
             ui.set_note_title("".into());
-            ui.set_active_folder("General".into());
+            ui.set_active_folder("*All Notes*".into());
             ui.set_note_category("General".into());
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("".into());
@@ -2542,6 +2542,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
+                return;
+            }
             let cur_folder = active_folder.lock().unwrap().clone();
             if cur_folder == "*All Notes*" {
                 return;
@@ -2565,6 +2568,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
+                return;
+            }
             ui.set_new_folder_name("".into());
             ui.set_show_folder_modal(true);
         }
@@ -2582,6 +2588,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         move |name| {
             let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
+                return;
+            }
             let name_clean = name.trim();
 
             if name_clean.is_empty() {

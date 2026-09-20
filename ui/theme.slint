@@ -40,3 +40,40 @@ export global Theme {
     out property <color> primary_text: accent_text;
     out property <color> modal_scrim: overlay;
 }
+
+export component TooltipBubble inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> show: false;
+
+    width: txt.preferred-width + 16px;
+    height: Math.max(22px, txt.preferred-height + 8px);
+    background: Theme.bg_surface;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: Theme.border_active;
+    drop-shadow-blur: 6px;
+    drop-shadow-color: #00000050;
+    drop-shadow-offset-y: 2px;
+    z: 1000;
+
+    opacity: root.show ? 1.0 : 0.0;
+    visible: root.show || root.opacity > 0.01;
+
+    animate opacity {
+        duration: 150ms;
+        delay: root.show ? 1000ms : 0ms;
+    }
+
+    txt := Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        text: root.text;
+        font-size: 11px;
+        font-weight: 500;
+        color: Theme.text_primary;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}

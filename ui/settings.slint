@@ -44,14 +44,14 @@ export component SettingsDialog inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 700px;
-        height: root.is_reencrypting ? 560px : 510px;
+        height: content_layout.preferred-height;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
         border-color: Theme.border_active;
         clip: true;
 
-        VerticalLayout {
+        content_layout := VerticalLayout {
             padding-top: 16px;
             padding-bottom: 16px;
             padding-left: 24px;
@@ -322,6 +322,13 @@ export component SettingsDialog inherits Rectangle {
                             color: Theme.text_primary;
                             vertical-alignment: center;
                         }
+                    }
+
+                    Text {
+                        text: "Changing your master password will re-encrypt all notes with the new password.";
+                        font-size: 11px;
+                        color: Theme.text_secondary;
+                        wrap: word-wrap;
                     }
 
                     HorizontalLayout {

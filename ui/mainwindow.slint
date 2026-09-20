@@ -1,5 +1,5 @@
 import { Button, LineEdit, TextEdit, ScrollView, ProgressIndicator, ComboBox, Palette } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, TooltipBubble } from "theme.slint";
 import { 
     UnlockModal, 
     LoadingModal, 
@@ -52,7 +52,7 @@ export component MainWindow inherits Window {
 
     // --- Dynamic 3-Pane Data Models ---
     in property <[string]> folders: [];
-    in-out property <string> active_folder: "General";
+    in-out property <string> active_folder: "*All Notes*";
     in property <[NoteMetadata]> current_notes: [];
     in property <[string]> available_categories: [];
     in property <string> vault_status_text: "Locked";
@@ -300,10 +300,14 @@ export component MainWindow inherits Window {
                                         Rectangle {
                                             height: 30px;
                                             border-radius: 4px;
-                                            background: export_item_touch.has-hover ? Theme.hover : Colors.transparent;
+                                            background: (!root.is_locked && export_item_touch.has-hover) ? Theme.hover : Colors.transparent;
 
                                             export_item_touch := TouchArea {
+                                                mouse-cursor: root.is_locked ? default : pointer;
                                                 clicked => {
+                                                    if root.is_locked {
+                                                        return;
+                                                    }
                                                     file_popup.close();
                                                     root.show_export_modal = true;
                                                 }
@@ -320,9 +324,9 @@ export component MainWindow inherits Window {
                                                     source: @image-url("../assets/icons/file.svg");
                                                     width: 14px;
                                                     height: 14px;
-                                                    colorize: Theme.text_primary;
+                                                    colorize: root.is_locked ? Theme.text_muted : Theme.text_primary;
                                                 }
-                                                Text { text: "Export Vault"; font-size: 12px; color: Theme.text_primary; vertical-alignment: center; }
+                                                Text { text: "Export Vault"; font-size: 12px; color: root.is_locked ? Theme.text_muted : Theme.text_primary; vertical-alignment: center; }
                                             }
                                         }
 
@@ -367,6 +371,7 @@ export component MainWindow inherits Window {
                     height: 48px;
                     vertical-stretch: 0;
                     background: Theme.bg_secondary;
+                    z: 10;
 
                     Rectangle {
                         x: 0px;
@@ -407,8 +412,11 @@ export component MainWindow inherits Window {
                                 background: refresh_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                 refresh_touch := TouchArea {
-                                    mouse-cursor: pointer;
+                                    mouse-cursor: root.is_locked ? default : pointer;
                                     clicked => {
+                                        if root.is_locked {
+                                            return;
+                                        }
                                         if root.has_unsaved_changes {
                                             root.pending_action_type = "rescan_vault";
                                             root.pending_action_payload = "";
@@ -423,9 +431,16 @@ export component MainWindow inherits Window {
                                     source: @image-url("../assets/icons/refresh.svg");
                                     width: 14px;
                                     height: 14px;
-                                    colorize: Theme.text_primary;
+                                    colorize: root.is_locked ? Theme.text_muted : Theme.text_primary;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
+                                }
+
+                                TooltipBubble {
+                                    text: "Refresh Vault (F5)";
+                                    show: !root.is_locked && refresh_touch.has-hover;
+                                    x: 0px;
+                                    y: parent.height + 4px;
                                 }
                             }
 
@@ -433,11 +448,14 @@ export component MainWindow inherits Window {
                                 height: 26px;
                                 width: 28px;
                                 border-radius: 4px;
-                                background: add_folder_touch.has-hover ? Theme.hover : Colors.transparent;
+                                background: (!root.is_locked && add_folder_touch.has-hover) ? Theme.hover : Colors.transparent;
 
                                 add_folder_touch := TouchArea {
-                                    mouse-cursor: pointer;
+                                    mouse-cursor: root.is_locked ? default : pointer;
                                     clicked => {
+                                        if root.is_locked {
+                                            return;
+                                        }
                                         if root.has_unsaved_changes {
                                             root.pending_action_type = "new_folder";
                                             root.pending_action_payload = "";
@@ -454,9 +472,16 @@ export component MainWindow inherits Window {
                                     source: @image-url("../assets/icons/plus.svg");
                                     width: 14px;
                                     height: 14px;
-                                    colorize: Theme.text_primary;
+                                    colorize: root.is_locked ? Theme.text_muted : Theme.text_primary;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
+                                }
+
+                                TooltipBubble {
+                                    text: "New Folder";
+                                    show: !root.is_locked && add_folder_touch.has-hover;
+                                    x: 0px;
+                                    y: parent.height + 4px;
                                 }
                             }
 
@@ -483,9 +508,16 @@ export component MainWindow inherits Window {
                                     source: @image-url("../assets/icons/lock.svg");
                                     width: 14px;
                                     height: 14px;
-                                    colorize: Theme.text_primary;
+                                    colorize: root.is_locked ? Theme.accent : Theme.text_primary;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
+                                }
+
+                                TooltipBubble {
+                                    text: root.is_locked ? "Unlock Vault" : "Lock Vault";
+                                    show: lock_touch.has-hover;
+                                    x: parent.width - self.width;
+                                    y: parent.height + 4px;
                                 }
                             }
                         }
@@ -493,7 +525,11 @@ export component MainWindow inherits Window {
                 }
 
                 // Folders Flat List
-                ScrollView {
+                if root.is_locked : Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                if !root.is_locked : ScrollView {
                     vertical-stretch: 1;
 
                     VerticalLayout {
@@ -777,6 +813,7 @@ export component MainWindow inherits Window {
                     height: 52px;
                     vertical-stretch: 0;
                     background: Theme.bg_surface;
+                    z: 10;
 
                     Rectangle {
                         x: 0px;
@@ -798,13 +835,14 @@ export component MainWindow inherits Window {
                             font-size: 13px;
                             text <=> root.search_query;
                             placeholder-text: "Search notes...";
+                            enabled: !root.is_locked;
                             horizontal-stretch: 1;
                             edited(val) => {
                                 root.search_changed(val);
                             }
                         }
 
-                        if root.active_folder != "*All Notes*" : Rectangle {
+                        if !root.is_locked && root.active_folder != "*All Notes*" : Rectangle {
                             height: 28px;
                             width: 32px;
                             border-radius: 4px;
@@ -831,12 +869,23 @@ export component MainWindow inherits Window {
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                             }
+
+                            TooltipBubble {
+                                text: "New Note";
+                                show: !root.is_locked && new_note_touch.has-hover;
+                                x: parent.width - self.width;
+                                y: parent.height + 4px;
+                            }
                         }
                     }
                 }
 
                 // Pane 2 Notes Cards List (ScrollView)
-                ScrollView {
+                if root.is_locked : Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                if !root.is_locked : ScrollView {
                     vertical-stretch: 1;
 
                     VerticalLayout {
@@ -1038,7 +1087,7 @@ export component MainWindow inherits Window {
             horizontal-stretch: 1;
             background: Theme.bg_main;
 
-            if root.active_note_id != "" : VerticalLayout {
+            if !root.is_locked && root.active_note_id != "" : VerticalLayout {
                 x: 0px;
                 y: 0px;
                 width: parent.width;
@@ -1051,6 +1100,7 @@ export component MainWindow inherits Window {
                         height: 52px;
                         vertical-stretch: 0;
                         background: Theme.bg_surface;
+                        z: 20;
 
                         Rectangle {
                             x: 0px;
@@ -1087,10 +1137,8 @@ export component MainWindow inherits Window {
 
                                 for tag[idx] in root.note_tags : Rectangle {
                                     height: 24px;
-                                    border-radius: 12px;
+                                    border-radius: 4px;
                                     background: Theme.bg_active;
-                                    border-width: 1px;
-                                    border-color: Theme.border_active;
 
                                     HorizontalLayout {
                                         padding-left: 8px;
@@ -1100,33 +1148,41 @@ export component MainWindow inherits Window {
                                         cross-axis-alignment: center;
 
                                         Text {
-                                            text: "#" + tag;
+                                            text: tag;
                                             font-size: 11px;
                                             font-weight: 500;
-                                            color: Theme.accent;
+                                            color: Theme.text_primary;
                                             vertical-alignment: center;
                                         }
 
                                         Rectangle {
                                             width: 14px;
                                             height: 14px;
-                                            border-radius: 7px;
-                                            background: tag_del_touch.has-hover ? Theme.border_active : Colors.transparent;
+                                            border-radius: 3px;
+                                            background: tag_del_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             tag_del_touch := TouchArea {
+                                                mouse-cursor: pointer;
                                                 clicked => {
                                                     root.has_unsaved_changes = true;
                                                     root.remove_tag_requested(idx);
                                                 }
                                             }
 
-                                            Text {
-                                                text: "×";
-                                                font-size: 12px;
-                                                font-weight: 700;
-                                                color: Theme.text_secondary;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
+                                            Image {
+                                                source: @image-url("../assets/icons/x.svg");
+                                                width: 8px;
+                                                height: 8px;
+                                                colorize: tag_del_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+
+                                            TooltipBubble {
+                                                text: "Remove Tag";
+                                                show: tag_del_touch.has-hover;
+                                                x: (parent.width - self.width) / 2;
+                                                y: parent.height + 4px;
                                             }
                                         }
                                     }
@@ -1166,6 +1222,13 @@ export component MainWindow inherits Window {
                                             color: Theme.text_primary;
                                             vertical-alignment: center;
                                         }
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Add Tag";
+                                        show: add_tag_touch.has-hover;
+                                        x: 0px;
+                                        y: parent.height + 4px;
                                     }
                                 }
                             }
@@ -1236,6 +1299,13 @@ export component MainWindow inherits Window {
                                         vertical-alignment: center;
                                     }
                                 }
+
+                                TooltipBubble {
+                                    text: "Save Note (Ctrl+S)";
+                                    show: save_touch.has-hover;
+                                    x: parent.width - self.width;
+                                    y: parent.height + 4px;
+                                }
                             }
                         }
                     }
@@ -1244,6 +1314,7 @@ export component MainWindow inherits Window {
                     Rectangle {
                         height: 36px;
                         background: Theme.bg_surface;
+                        z: 10;
 
                         // Bottom border
                         Rectangle {
@@ -1289,6 +1360,13 @@ export component MainWindow inherits Window {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                 }
+
+                                TooltipBubble {
+                                    text: "Toggle Line Numbers";
+                                    show: ln_touch.has-hover;
+                                    x: 0px;
+                                    y: parent.height + 4px;
+                                }
                             }
 
                             // 2. Toggle Line Wrap Button
@@ -1322,6 +1400,13 @@ export component MainWindow inherits Window {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                 }
+
+                                TooltipBubble {
+                                    text: "Toggle Line Wrap";
+                                    show: wrap_touch.has-hover;
+                                    x: (parent.width - self.width) / 2;
+                                    y: parent.height + 4px;
+                                }
                             }
 
                             // 3. Toggle Current Line Highlight Button
@@ -1352,6 +1437,13 @@ export component MainWindow inherits Window {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
                                 }
+
+                                TooltipBubble {
+                                    text: "Highlight Current Line";
+                                    show: hl_touch.has-hover;
+                                    x: (parent.width - self.width) / 2;
+                                    y: parent.height + 4px;
+                                }
                             }
 
                             // Separator
@@ -1361,9 +1453,9 @@ export component MainWindow inherits Window {
                                 background: Theme.border;
                             }
 
-                            // 4. Font Size Controls
+                            // 4. Font Size Controls (- [size] +)
                             HorizontalLayout {
-                                spacing: 3px;
+                                spacing: 4px;
                                 alignment: center;
                                 cross-axis-alignment: center;
 
@@ -1391,6 +1483,13 @@ export component MainWindow inherits Window {
                                         colorize: fdec_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Decrease Font Size";
+                                        show: fdec_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
                                     }
                                 }
 
@@ -1434,6 +1533,13 @@ export component MainWindow inherits Window {
                                         colorize: finc_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Increase Font Size";
+                                        show: finc_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
                                     }
                                 }
                             }
@@ -1482,6 +1588,13 @@ export component MainWindow inherits Window {
                                         vertical-alignment: center;
                                     }
                                 }
+
+                                TooltipBubble {
+                                    text: "Export Note as unencrypted JSON";
+                                    show: json_touch.has-hover;
+                                    x: (parent.width - self.width) / 2;
+                                    y: parent.height + 4px;
+                                }
                             }
 
                             // 6. Export Decrypted Note as TXT
@@ -1521,6 +1634,13 @@ export component MainWindow inherits Window {
                                         color: txt_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
                                         vertical-alignment: center;
                                     }
+                                }
+
+                                TooltipBubble {
+                                    text: "Export Note as unencrypted Text / Markdown";
+                                    show: txt_touch.has-hover;
+                                    x: parent.width - self.width;
+                                    y: parent.height + 4px;
                                 }
                             }
                         }
@@ -1640,7 +1760,53 @@ export component MainWindow inherits Window {
                     }
             }
 
-            if root.active_note_id == "" : Rectangle {
+            if root.is_locked : Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                background: Theme.bg_main;
+
+                VerticalLayout {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    spacing: 14px;
+                    alignment: center;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        source: @image-url("../assets/icons/lock.svg");
+                        width: 48px;
+                        height: 48px;
+                        colorize: Theme.accent;
+                    }
+
+                    Text {
+                        text: "Vault is Locked";
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "Unlock the vault to access and edit your secure notes.";
+                        font-size: 13px;
+                        color: Theme.text_secondary;
+                        horizontal-alignment: center;
+                    }
+
+                    Button {
+                        text: "Unlock Vault";
+                        primary: true;
+                        clicked => {
+                            root.show_unlock_modal = true;
+                        }
+                    }
+                }
+            }
+
+            if !root.is_locked && root.active_note_id == "" : Rectangle {
                 x: 0px;
                 y: 0px;
                 width: parent.width;

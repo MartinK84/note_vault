@@ -1,5 +1,5 @@
 import { LineEdit, TextEdit, Palette } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, TooltipBubble } from "theme.slint";
 
 export struct QuickSearchResult {
     id: string,
@@ -168,6 +168,13 @@ export component QuickSearchWindow inherits Window {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                         }
+
+                        TooltipBubble {
+                            text: "Clear Search / Close (Esc)";
+                            show: close_touch.has-hover;
+                            x: parent.width - self.width;
+                            y: parent.height + 4px;
+                        }
                     }
                 }
 
@@ -279,6 +286,13 @@ export component QuickSearchWindow inherits Window {
                                     colorize: view_touch.has-hover ? Theme.accent_text : Theme.text_muted;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
+                                }
+
+                                TooltipBubble {
+                                    text: "Open in Editor (Alt)";
+                                    show: view_touch.has-hover;
+                                    x: parent.width - self.width;
+                                    y: parent.height + 4px;
                                 }
                             }
                         }
