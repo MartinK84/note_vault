@@ -188,8 +188,8 @@ export component MainWindow inherits Window {
     // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
     // ==========================================
     HorizontalLayout {
-        padding: 0px;
-        spacing: 0px;
+        padding: 8px;
+        spacing: 8px;
 
         // -------------------------------------------------------------
         // PANE 1: FOLDERS LIST (Fixed ~210px)
@@ -197,15 +197,10 @@ export component MainWindow inherits Window {
         Rectangle {
             width: 210px;
             background: Theme.bg_secondary;
-
-            // 1px right border divider
-            Rectangle {
-                x: parent.width - 1px;
-                y: 0px;
-                width: 1px;
-                height: parent.height;
-                background: Theme.border;
-            }
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
 
             VerticalLayout {
                 padding: 0px;
@@ -795,15 +790,10 @@ export component MainWindow inherits Window {
         Rectangle {
             width: 300px;
             background: Theme.bg_surface;
-
-            // 1px right border divider
-            Rectangle {
-                x: parent.width - 1px;
-                y: 0px;
-                width: 1px;
-                height: parent.height;
-                background: Theme.border;
-            }
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
 
             VerticalLayout {
                 padding: 0px;
@@ -1087,6 +1077,10 @@ export component MainWindow inherits Window {
         Rectangle {
             horizontal-stretch: 1;
             background: Theme.bg_main;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
 
             if !root.is_locked && root.active_note_id != "" : VerticalLayout {
                 x: 0px;
