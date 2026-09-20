@@ -1951,6 +1951,7 @@ export component MainWindow inherits Window {
     }
 
     if root.show_settings_modal : SettingsDialog {
+        is_vault_locked: root.is_locked;
         vault_path <=> root.settings_vault_path;
         use_multithreading <=> root.settings_use_multithreading;
         theme <=> root.settings_theme;

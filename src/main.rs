@@ -1358,6 +1358,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let active_hotkey = Arc::clone(&active_hotkey);
         let is_open = Arc::clone(&is_quick_search_open);
         let shown_at = Arc::clone(&quick_search_shown_at);
+        let session_password = Arc::clone(&session_password);
 
         thread::spawn(move || {
             let receiver = GlobalHotKeyEvent::receiver();
@@ -1365,6 +1366,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if event.state == HotKeyState::Pressed {
                     let current_hk_id = active_hotkey.lock().unwrap().map(|hk| hk.id());
                     if current_hk_id == Some(event.id) {
+                        // Quick search is disabled when vault is locked
+                        if session_password.lock().unwrap().is_none() {
+                            continue;
+                        }
+
                         let weak = quick_search_weak.clone();
                         let m_store = Arc::clone(&metadata_store);
                         let is_open = Arc::clone(&is_open);
@@ -1414,8 +1420,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     quick_search.on_search_changed({
         let quick_search_weak = quick_search_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
         move |text| {
             let Some(qs) = quick_search_weak.upgrade() else { return };
+            if session_password.lock().unwrap().is_none() {
+                is_quick_search_open.store(false, Ordering::SeqCst);
+                let _ = qs.hide();
+                return;
+            }
             let results = {
                 let store = metadata_store.lock().unwrap();
                 filter_quick_search_results(text.as_str(), &store)
@@ -1462,6 +1475,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(e) => {
                             eprintln!("Failed to decrypt note for clipboard: {}", e);
                         }
+                    }
+                } else {
+                    is_quick_search_open.store(false, Ordering::SeqCst);
+                    if let Some(qs) = quick_search_weak.upgrade() {
+                        let _ = qs.hide();
                     }
                 }
             }
@@ -1524,6 +1542,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(e) => {
                             eprintln!("Failed to decrypt note for viewer: {}", e);
                         }
+                    }
+                } else {
+                    is_quick_search_open.store(false, Ordering::SeqCst);
+                    if let Some(qs) = quick_search_weak.upgrade() {
+                        let _ = qs.hide();
                     }
                 }
             }
@@ -1914,6 +1937,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         let quick_search_weak = quick_search_weak.clone();
         let quick_viewer_weak = quick_viewer_weak.clone();
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
         let vault_path = Arc::clone(&vault_path);
         let use_multithreading = Arc::clone(&use_multithreading);
         let app_config = Arc::clone(&app_config);
@@ -2013,6 +2037,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 metadata_store.lock().unwrap().clear();
                 *active_folder.lock().unwrap() = "*All Notes*".to_string();
                 *search_query.lock().unwrap() = String::new();
+
+                is_quick_search_open.store(false, Ordering::SeqCst);
+                if let Some(qs) = quick_search_weak.upgrade() {
+                    let _ = qs.hide();
+                    qs.set_results(std::rc::Rc::new(slint::VecModel::default()).into());
+                }
+                if let Some(qv) = quick_viewer_weak.upgrade() {
+                    qv.invoke_clear_data();
+                    qv.set_content("".into());
+                    qv.set_note_title("".into());
+                    let _ = qv.hide();
+                }
 
                 ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());
                 ui.set_current_notes(std::rc::Rc::new(slint::VecModel::default()).into());
@@ -2216,8 +2252,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_browse_new_keyfile_requested({
         let window_weak = window_weak.clone();
+        let session_password = Arc::clone(&session_password);
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
+            if session_password.lock().unwrap().is_none() {
+                return;
+            }
             let picked_file = rfd::FileDialog::new()
                 .set_title("Select New Keyfile")
                 .pick_file();
@@ -2665,6 +2705,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_lock_vault({
         let window_weak = window_weak.clone();
+        let quick_search_weak = quick_search_weak.clone();
+        let quick_viewer_weak = quick_viewer_weak.clone();
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
         let session_keyfile = Arc::clone(&session_keyfile);
@@ -2680,6 +2723,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             metadata_store.lock().unwrap().clear();
             *active_folder.lock().unwrap() = "*All Notes*".to_string();
             *search_query.lock().unwrap() = String::new();
+
+            is_quick_search_open.store(false, Ordering::SeqCst);
+            if let Some(qs) = quick_search_weak.upgrade() {
+                let _ = qs.hide();
+                qs.set_results(std::rc::Rc::new(slint::VecModel::default()).into());
+            }
+            if let Some(qv) = quick_viewer_weak.upgrade() {
+                qv.invoke_clear_data();
+                qv.set_content("".into());
+                qv.set_note_title("".into());
+                let _ = qv.hide();
+            }
 
             ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_current_notes(std::rc::Rc::new(slint::VecModel::default()).into());

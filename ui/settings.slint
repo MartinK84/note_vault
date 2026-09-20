@@ -20,6 +20,7 @@ export component SettingsDialog inherits Rectangle {
     in-out property <string> global_hotkey: "Shift+Space";
     in-out property <bool> minimize_to_tray: true;
     in-out property <bool> is_recording_hotkey: false;
+    in property <bool> is_vault_locked: true;
 
     // Password Change Properties
     in-out property <string> current_password: "";
@@ -310,6 +311,7 @@ export component SettingsDialog inherits Rectangle {
                 border-radius: 8px;
                 border-width: 1px;
                 border-color: Theme.border;
+                opacity: root.is_vault_locked ? 0.55 : 1.0;
 
                 VerticalLayout {
                     padding: 14px;
@@ -336,7 +338,15 @@ export component SettingsDialog inherits Rectangle {
                         }
                     }
 
-                    Text {
+                    if root.is_vault_locked : Text {
+                        text: "🔒 Vault is locked. Unlock the vault to change the master password.";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: Theme.accent;
+                        wrap: word-wrap;
+                    }
+
+                    if !root.is_vault_locked : Text {
                         text: "Changing your master password will re-encrypt all notes with the new password.";
                         font-size: 11px;
                         color: Theme.text_secondary;
@@ -360,7 +370,8 @@ export component SettingsDialog inherits Rectangle {
                                 text <=> root.current_password;
                                 input-type: InputType.password;
                                 font-size: 12px;
-                                placeholder-text: "Current password...";
+                                placeholder-text: root.is_vault_locked ? "Vault locked" : "Current password...";
+                                enabled: !root.is_vault_locked && !root.is_reencrypting;
                             }
                         }
 
@@ -378,7 +389,8 @@ export component SettingsDialog inherits Rectangle {
                                 text <=> root.new_password;
                                 input-type: InputType.password;
                                 font-size: 12px;
-                                placeholder-text: "New password...";
+                                placeholder-text: root.is_vault_locked ? "Vault locked" : "New password...";
+                                enabled: !root.is_vault_locked && !root.is_reencrypting;
                             }
                         }
 
@@ -396,7 +408,8 @@ export component SettingsDialog inherits Rectangle {
                                 text <=> root.confirm_password;
                                 input-type: InputType.password;
                                 font-size: 12px;
-                                placeholder-text: "Confirm new...";
+                                placeholder-text: root.is_vault_locked ? "Vault locked" : "Confirm new...";
+                                enabled: !root.is_vault_locked && !root.is_reencrypting;
                             }
                         }
                     }
@@ -407,7 +420,7 @@ export component SettingsDialog inherits Rectangle {
 
                         Button {
                             text: "Change Password";
-                            enabled: !root.is_reencrypting && root.current_password != "" && root.new_password != "" && root.confirm_password != "";
+                            enabled: !root.is_vault_locked && !root.is_reencrypting && root.current_password != "" && root.new_password != "" && root.confirm_password != "";
                             clicked => {
                                 root.change_password(root.current_password, root.new_password, root.confirm_password);
                             }
@@ -439,6 +452,7 @@ export component SettingsDialog inherits Rectangle {
                 border-radius: 8px;
                 border-width: 1px;
                 border-color: Theme.border;
+                opacity: root.is_vault_locked ? 0.55 : 1.0;
 
                 VerticalLayout {
                     padding: 14px;
@@ -458,7 +472,15 @@ export component SettingsDialog inherits Rectangle {
                         }
                     }
 
-                    Text {
+                    if root.is_vault_locked : Text {
+                        text: "🔒 Vault is locked. Unlock the vault to manage the keyfile.";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: Theme.accent;
+                        wrap: word-wrap;
+                    }
+
+                    if !root.is_vault_locked : Text {
                         text: "Adding or removing a keyfile will re-encrypt all notes. Keep your keyfile safe!";
                         font-size: 11px;
                         color: Theme.text_secondary;
@@ -483,7 +505,8 @@ export component SettingsDialog inherits Rectangle {
                                 text <=> root.keyfile_current_password;
                                 input-type: InputType.password;
                                 font-size: 12px;
-                                placeholder-text: "Current password...";
+                                placeholder-text: root.is_vault_locked ? "Vault locked" : "Current password...";
+                                enabled: !root.is_vault_locked && !root.is_keyfile_reencrypting;
                             }
                         }
 
@@ -504,14 +527,14 @@ export component SettingsDialog inherits Rectangle {
                                     text: root.new_keyfile_path;
                                     read-only: true;
                                     font-size: 12px;
-                                    placeholder-text: root.remove_keyfile ? "Keyfile will be removed" : "Select keyfile...";
-                                    enabled: !root.remove_keyfile;
+                                    placeholder-text: root.is_vault_locked ? "Vault locked" : (root.remove_keyfile ? "Keyfile will be removed" : "Select keyfile...");
+                                    enabled: !root.is_vault_locked && !root.remove_keyfile && !root.is_keyfile_reencrypting;
                                     horizontal-stretch: 1;
                                 }
 
                                 Button {
                                     text: "Browse...";
-                                    enabled: !root.remove_keyfile && !root.is_keyfile_reencrypting;
+                                    enabled: !root.is_vault_locked && !root.remove_keyfile && !root.is_keyfile_reencrypting;
                                     clicked => {
                                         root.browse_new_keyfile();
                                     }
@@ -526,6 +549,7 @@ export component SettingsDialog inherits Rectangle {
                             CheckBox {
                                 text: "Remove Keyfile";
                                 checked <=> root.remove_keyfile;
+                                enabled: !root.is_vault_locked && !root.is_keyfile_reencrypting;
                             }
                         }
                     }
@@ -536,7 +560,8 @@ export component SettingsDialog inherits Rectangle {
 
                         Button {
                             text: "Update Keyfile";
-                            enabled: !root.is_keyfile_reencrypting &&
+                            enabled: !root.is_vault_locked &&
+                                     !root.is_keyfile_reencrypting &&
                                      root.keyfile_current_password != "" &&
                                      ((root.new_keyfile_path != "" && !root.remove_keyfile) || root.remove_keyfile);
                             clicked => {
