@@ -2,3 +2,5 @@
 Cargo.lock
 vault
 config.json
+*.key
+*.zip
