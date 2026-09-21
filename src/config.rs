@@ -125,6 +125,10 @@ fn default_editor_font_size() -> u32 {
     14
 }
 
+fn default_editor_markdown_mode() -> bool {
+    false
+}
+
 /// Persistent configuration for NoteVault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -158,6 +162,9 @@ pub struct AppConfig {
     #[serde(default = "default_editor_font_size")]
     pub editor_font_size: u32,
 
+    #[serde(default = "default_editor_markdown_mode")]
+    pub editor_markdown_mode: bool,
+
     #[serde(default)]
     pub launch_at_startup: bool,
 }
@@ -175,6 +182,7 @@ impl Default for AppConfig {
             editor_line_wrap: default_editor_line_wrap(),
             editor_highlight_current_line: default_editor_highlight_current_line(),
             editor_font_size: default_editor_font_size(),
+            editor_markdown_mode: default_editor_markdown_mode(),
             launch_at_startup: false,
         }
     }
@@ -249,6 +257,7 @@ mod tests {
         assert!(config.editor_line_wrap);
         assert!(config.editor_highlight_current_line);
         assert_eq!(config.editor_font_size, 14);
+        assert!(!config.editor_markdown_mode);
         assert!(!config.launch_at_startup);
     }
 
@@ -268,6 +277,7 @@ mod tests {
             editor_line_wrap: false,
             editor_highlight_current_line: false,
             editor_font_size: 18,
+            editor_markdown_mode: true,
             launch_at_startup: true,
         };
 
@@ -299,6 +309,7 @@ mod tests {
         assert!(loaded.editor_line_wrap);
         assert!(loaded.editor_highlight_current_line);
         assert_eq!(loaded.editor_font_size, 14);
+        assert!(!loaded.editor_markdown_mode);
         assert!(!loaded.launch_at_startup);
 
         let _ = fs::remove_dir_all(&temp_dir);

@@ -291,3 +291,99 @@ fn test_get_suggested_tags_deduplication_and_whitespace() {
     assert_eq!(suggestions[0].count, 1);
 }
 
+#[test]
+fn test_render_note_markdown() {
+    let note_content = "# Project Meeting\n\n- [x] Discuss architecture\n- [ ] Write documentation\n\nSee `main.rs` for details.";
+    let rendered = render_markdown_styled(note_content);
+    assert_ne!(rendered, slint::StyledText::default());
+}
+
+#[test]
+fn test_table_rendering() {
+    let table = "`┌──────────┬─────────────┐`\n`│ Syntax   │ Description │`\n`├──────────┼─────────────┤`\n`│ Header   │ Title       │`\n`│ Paragraph│ Text        │`\n`└──────────┴─────────────┘`";
+    let res = slint::StyledText::from_markdown(table);
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_line_breaks_and_paragraphs() {
+    let md = "Line 1  \nLine 2\n\nParagraph 2\n\n**<u>Heading</u>**\n\nParagraph 3";
+    let res = slint::StyledText::from_markdown(md);
+    assert!(res.is_ok());
+}
+
+#[test]
+fn test_end_to_end_github_markdown_rendering() {
+    let raw_md = r#"# Architecture Overview
+
+Here is a summary of NoteVault's core architecture.
+Every note is encrypted with AES-256-GCM.
+
+## Components & Modules
+
+| Component | Purpose | Status |
+| :--- | :---: | ---: |
+| Crypto | AES-GCM + Argon2id | Complete |
+| Markdown | GFM Preprocessor | Complete |
+| UI | Slint Native | Complete |
+
+### Quick Tasks
+- [x] Implement table support
+- [x] Fix paragraph squishing
+- [ ] Add PDF export
+
+> Security is not a product, but a process.
+
+```rust
+fn get_vault() -> Vault {
+    Vault::open("vault.vault")
+}
+```
+"#;
+    let styled = render_markdown_styled(raw_md);
+    assert_ne!(styled, slint::StyledText::default());
+}
+
+#[test]
+fn test_parse_markdown_into_blocks_in_main() {
+    let raw_md = r#"# Architecture Overview
+
+Here is a summary of NoteVault's core architecture.
+Every note is encrypted with AES-256-GCM.
+
+## Components & Modules
+
+| Component | Purpose | Status |
+| :--- | :---: | ---: |
+| Crypto | AES-GCM + Argon2id | Complete |
+| Markdown | GFM Preprocessor | Complete |
+| UI | Slint Native | Complete |
+
+### Quick Tasks
+- [x] Implement table support
+- [x] Fix paragraph squishing
+- [ ] Add PDF export
+
+> Security is not a product, but a process.
+
+```rust
+fn get_vault() -> Vault {
+    Vault::open("vault.vault")
+}
+```
+
+$$
+E = mc^2
+$$
+"#;
+    let blocks = parse_markdown_into_blocks(raw_md);
+    assert!(blocks.iter().any(|b| b.block_type == 0 && b.heading_level == 1));
+    assert!(blocks.iter().any(|b| b.block_type == 2 && b.code_lang == "rust"));
+    assert!(blocks.iter().any(|b| b.block_type == 3 && b.table_headers.row_count() == 3));
+    assert!(blocks.iter().any(|b| b.block_type == 4));
+    assert!(blocks.iter().any(|b| b.block_type == 5 && b.text.contains("E = mc²")));
+    assert!(blocks.iter().any(|b| b.block_type == 7 && b.is_task_checked));
+    assert!(blocks.iter().any(|b| b.block_type == 7 && !b.is_task_checked));
+}
+
+

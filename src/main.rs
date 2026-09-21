@@ -15,17 +15,17 @@ use note_vault::config::AppConfig;
 use note_vault::{
     format_decrypted_json_export, format_decrypted_txt_export, format_line_numbers,
     format_markdown_export, format_unix_date, format_unix_timestamp, load_note_decrypted,
-    sanitize_filename, save_note_encrypted, validate_folder_name, Note,
+    parse_markdown_into_blocks, render_markdown_styled, sanitize_filename, save_note_encrypted,
+    validate_folder_name, Note, MainWindow, NoteMetadata, QuickSearchResult, QuickSearchWindow,
+    QuickViewerWindow, TagSuggestion, Theme, UnlockWindow,
 };
 use rayon::prelude::*;
-use slint::Model;
+use slint::{ComponentHandle, Model};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use uuid::Uuid;
 use walkdir::WalkDir;
 use zeroize::{Zeroize, Zeroizing};
-
-slint::include_modules!();
 
 /// Command line arguments for the NoteVault GUI application.
 #[derive(Parser, Debug)]
@@ -838,6 +838,7 @@ fn load_note_into_ui(
     };
 
     if let Some(meta) = meta {
+        ui.set_editor_markdown_mode(false);
         ui.set_active_note_id(note_id.into());
         ui.set_note_title(meta.title.clone().into());
         ui.set_note_category(meta.category.clone().into());
@@ -857,12 +858,17 @@ fn load_note_into_ui(
             match load_note_decrypted(&password, kf_bytes, &meta.file_path) {
                 Ok(mut note) => {
                     ui.set_line_numbers_text(format_line_numbers(&note.content).into());
+                    let blocks = parse_markdown_into_blocks(&note.content);
+                    ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::from(blocks)).into());
+                    ui.set_note_markdown_rendered(render_markdown_styled(&note.content));
                     ui.set_note_content(note.content.as_str().into());
                     note.zeroize();
                 }
                 Err(e) => {
                     eprintln!("Error decrypting note at {:?}: {}", meta.file_path, e);
                     ui.set_line_numbers_text("1".into());
+                    ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
+                    ui.set_note_markdown_rendered(slint::StyledText::default());
                     ui.set_note_content(
                         format!("[Error: Failed to decrypt note: {}]", e).into(),
                     );
@@ -871,6 +877,8 @@ fn load_note_into_ui(
         } else {
             eprintln!("Error: Cannot decrypt note, vault session is locked.");
             ui.set_line_numbers_text("1".into());
+            ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
+            ui.set_note_markdown_rendered(slint::StyledText::default());
             ui.set_note_content("".into());
         }
 
@@ -1172,6 +1180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_editor_line_wrap(config.editor_line_wrap);
     main_window.set_editor_highlight_current_line(config.editor_highlight_current_line);
     main_window.set_editor_font_size(config.editor_font_size as i32);
+    main_window.set_editor_markdown_mode(false);
     main_window.set_line_numbers_text("1".into());
 
     // Check keyfile on startup if configured
@@ -2691,6 +2700,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_active_note_id("".into());
             ui.set_note_title("".into());
             ui.set_note_content("".into());
+            ui.set_editor_markdown_mode(false);
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("".into());
             refresh_models(&ui, &v_path, &metadata_store, &active_folder, &search_query);
@@ -2868,6 +2878,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                     ui.set_note_date("Just now".into());
                     ui.set_note_content("".into());
+                    ui.set_editor_markdown_mode(false);
                     ui.set_line_numbers_text("1".into());
                     ui.set_has_unsaved_changes(false);
                 }
@@ -3184,6 +3195,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_title(title_str.as_str().into());
             ui.set_note_date(formatted_date.into());
             ui.set_note_category(target_category.clone().into());
+            let blocks = parse_markdown_into_blocks(&content);
+            ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::from(blocks)).into());
+            ui.set_note_markdown_rendered(render_markdown_styled(&content));
             ui.set_has_unsaved_changes(false);
 
             refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
@@ -3213,6 +3227,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("Just now".into());
             ui.set_note_content("".into());
+            ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
+            ui.set_note_markdown_rendered(slint::StyledText::default());
+            ui.set_editor_markdown_mode(false);
             ui.set_line_numbers_text("1".into());
             ui.set_has_unsaved_changes(false);
         }
@@ -3731,6 +3748,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         move |key, value| {
             let mut cfg = app_config.lock().unwrap();
             match key.as_str() {
+                "markdown_mode" => {
+                    cfg.editor_markdown_mode = value == "true";
+                }
                 "line_numbers" => {
                     cfg.editor_show_line_numbers = value == "true";
                 }
@@ -3754,7 +3774,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -------------------------------------------------------------
-    // Callback: Note Content Edited (Update Line Numbers)
+    // Callback: Toggle Markdown Mode Requested
+    // -------------------------------------------------------------
+    main_window.on_toggle_markdown_mode_requested({
+        let window_weak = window_weak.clone();
+        move |is_markdown| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if is_markdown {
+                let content = ui.get_note_content().to_string();
+                let blocks = parse_markdown_into_blocks(&content);
+                ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::from(blocks)).into());
+                ui.set_note_markdown_rendered(render_markdown_styled(&content));
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Link Clicked in Markdown Preview
+    // -------------------------------------------------------------
+    main_window.on_link_clicked({
+        move |url| {
+            let url_str = url.to_string();
+            if url_str.starts_with("http://") || url_str.starts_with("https://") {
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", "", &url_str])
+                        .spawn();
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&url_str)
+                        .spawn();
+                }
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Note Content Edited (Update Line Numbers & Markdown)
     // -------------------------------------------------------------
     main_window.on_note_content_edited({
         let window_weak = window_weak.clone();
@@ -3773,6 +3832,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             if count != current_count {
                 ui.set_line_numbers_text(format_line_numbers(&content).into());
+            }
+            if ui.get_editor_markdown_mode() {
+                let blocks = parse_markdown_into_blocks(&content);
+                ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::from(blocks)).into());
+                ui.set_note_markdown_rendered(render_markdown_styled(&content));
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Copy Text to Clipboard (Code blocks, note markdown)
+    // -------------------------------------------------------------
+    main_window.on_copy_text_to_clipboard({
+        move |text| {
+            let text_str = text.to_string();
+            if !text_str.is_empty() {
+                if let Ok(mut clipboard) = Clipboard::new() {
+                    let _ = clipboard.set_text(&text_str);
+                }
             }
         }
     });

@@ -19,6 +19,24 @@ import { SettingsDialog } from "settings.slint";
 import { QuickSearchWindow, QuickViewerWindow, QuickSearchResult } from "quick_search.slint";
 import { UnlockWindow } from "unlock_window.slint";
 
+export struct TableRowData {
+    cells: [string],
+}
+
+export struct MarkdownBlockData {
+    block_type: int,
+    heading_level: int,
+    text: string,
+    styled_content: styled-text,
+    code_lang: string,
+    code_content: string,
+    table_headers: [string],
+    table_alignments: [int],
+    table_col_fractions: [float],
+    table_rows: [TableRowData],
+    is_task_checked: bool,
+}
+
 export { Theme, Palette, QuickSearchWindow, QuickViewerWindow, QuickSearchResult, UnlockWindow, TagSuggestion }
 
 export struct NoteMetadata {
@@ -123,6 +141,9 @@ export component MainWindow inherits Window {
     in-out property <string> note_content: "";
 
     // --- Note Editor Toolbar & Preferences State ---
+    in-out property <bool> editor_markdown_mode: false;
+    in-out property <styled-text> note_markdown_rendered;
+    in-out property <[MarkdownBlockData]> note_markdown_blocks: [];
     in-out property <bool> editor_show_line_numbers: false;
     in-out property <bool> editor_line_wrap: true;
     in-out property <bool> editor_highlight_current_line: true;
@@ -207,10 +228,13 @@ export component MainWindow inherits Window {
     callback start_export_requested();
 
     // Note Editor Callbacks
+    callback toggle_markdown_mode_requested(bool);
+    callback link_clicked(string);
     callback editor_setting_changed(string, string);
     callback export_note_json_requested();
     callback export_note_txt_requested();
     callback note_content_edited(string);
+    callback copy_text_to_clipboard(string);
 
     // ==========================================
     // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
@@ -877,6 +901,7 @@ export component MainWindow inherits Window {
                                         root.pending_action_payload = "";
                                         root.show_unsaved_warning = true;
                                     } else {
+                                        root.editor_markdown_mode = false;
                                         root.new_note_requested();
                                     }
                                 }
@@ -1019,6 +1044,7 @@ export component MainWindow inherits Window {
                             card_touch := TouchArea {
                                 clicked => {
                                     if root.active_note_id == note.id {
+                                        root.editor_markdown_mode = false;
                                         return;
                                     }
                                     if root.has_unsaved_changes {
@@ -1026,6 +1052,7 @@ export component MainWindow inherits Window {
                                         root.pending_action_payload = note.id;
                                         root.show_unsaved_warning = true;
                                     } else {
+                                        root.editor_markdown_mode = false;
                                         root.select_note_requested(note.id);
                                     }
                                 }
@@ -1356,11 +1383,58 @@ export component MainWindow inherits Window {
                             alignment: start;
                             cross-axis-alignment: center;
 
+                            // 0. Toggle Edit Mode / Markdown Rendered Mode Button
+                            mode_toggle_btn := Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 5px;
+                                background: root.editor_markdown_mode
+                                    ? (mode_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
+                                    : (mode_touch.has-hover ? Theme.hover : Colors.transparent);
+                                border-width: root.editor_markdown_mode ? 1px : 0px;
+                                border-color: root.editor_markdown_mode ? Theme.accent : Colors.transparent;
+                                animate background { duration: 120ms; }
+
+                                mode_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.editor_markdown_mode = !root.editor_markdown_mode;
+                                        root.editor_setting_changed("markdown_mode", root.editor_markdown_mode ? "true" : "false");
+                                        root.toggle_markdown_mode_requested(root.editor_markdown_mode);
+                                    }
+                                }
+
+                                Image {
+                                    source: root.editor_markdown_mode ? @image-url("../assets/icons/edit.svg") : @image-url("../assets/icons/eye.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.editor_markdown_mode ? Theme.accent : (mode_touch.has-hover ? Theme.text_primary : Theme.text_secondary);
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                TooltipBubble {
+                                    text: root.editor_markdown_mode ? "Switch to Edit Mode" : "Preview Markdown";
+                                    show: mode_touch.has-hover;
+                                    x: 0px;
+                                    y: parent.height + 4px;
+                                }
+                            }
+
+
+                            // Separator after mode toggle
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Theme.border;
+                            }
+
                             // 1. Toggle Line Numbers Button
                             line_numbers_btn := Rectangle {
                                 width: 28px;
                                 height: 28px;
                                 border-radius: 5px;
+                                opacity: root.editor_markdown_mode ? 0.35 : 1.0;
                                 background: root.editor_show_line_numbers
                                     ? (ln_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
                                     : (ln_touch.has-hover ? Theme.hover : Colors.transparent);
@@ -1369,6 +1443,7 @@ export component MainWindow inherits Window {
                                 animate background { duration: 120ms; }
 
                                 ln_touch := TouchArea {
+                                    enabled: !root.editor_markdown_mode;
                                     mouse-cursor: pointer;
                                     clicked => {
                                         root.editor_show_line_numbers = !root.editor_show_line_numbers;
@@ -1398,6 +1473,7 @@ export component MainWindow inherits Window {
                                 width: 28px;
                                 height: 28px;
                                 border-radius: 5px;
+                                opacity: root.editor_markdown_mode ? 0.35 : 1.0;
                                 background: root.editor_line_wrap
                                     ? (wrap_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
                                     : (wrap_touch.has-hover ? Theme.hover : Colors.transparent);
@@ -1406,6 +1482,7 @@ export component MainWindow inherits Window {
                                 animate background { duration: 120ms; }
 
                                 wrap_touch := TouchArea {
+                                    enabled: !root.editor_markdown_mode;
                                     mouse-cursor: pointer;
                                     clicked => {
                                         root.editor_line_wrap = !root.editor_line_wrap;
@@ -1438,6 +1515,7 @@ export component MainWindow inherits Window {
                                 width: 28px;
                                 height: 28px;
                                 border-radius: 5px;
+                                opacity: root.editor_markdown_mode ? 0.35 : 1.0;
                                 background: root.editor_highlight_current_line
                                     ? (hl_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
                                     : (hl_touch.has-hover ? Theme.hover : Colors.transparent);
@@ -1446,6 +1524,7 @@ export component MainWindow inherits Window {
                                 animate background { duration: 120ms; }
 
                                 hl_touch := TouchArea {
+                                    enabled: !root.editor_markdown_mode;
                                     mouse-cursor: pointer;
                                     clicked => {
                                         root.editor_highlight_current_line = !root.editor_highlight_current_line;
@@ -1675,106 +1754,476 @@ export component MainWindow inherits Window {
                         vertical-stretch: 1;
                         background: Theme.bg_main;
 
-                        HorizontalLayout {
-                            padding: 0px;
-                            spacing: 0px;
+                        // 1. Plain Text Editor View
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width;
+                            height: parent.height;
+                            visible: !root.editor_markdown_mode;
 
-                            // Line Numbers Gutter
-                            if root.editor_show_line_numbers : Rectangle {
-                                width: 46px;
-                                background: Theme.bg_surface;
+                            HorizontalLayout {
+                                padding: 0px;
+                                spacing: 0px;
 
-                                // Gutter right separator border
-                                Rectangle {
-                                    x: parent.width - 1px;
-                                    y: 0px;
-                                    width: 1px;
-                                    height: parent.height;
-                                    background: Theme.border;
+                                // Line Numbers Gutter
+                                if root.editor_show_line_numbers : Rectangle {
+                                    width: 46px;
+                                    background: Theme.bg_surface;
+
+                                    // Gutter right separator border
+                                    Rectangle {
+                                        x: parent.width - 1px;
+                                        y: 0px;
+                                        width: 1px;
+                                        height: parent.height;
+                                        background: Theme.border;
+                                    }
+
+                                    Rectangle {
+                                        x: 0px;
+                                        y: 0px;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        clip: true;
+
+                                        Text {
+                                            x: 0px;
+                                            y: editor_scroll.content-y + 14px;
+                                            width: parent.width - 10px;
+                                            text: root.line_numbers_text;
+                                            font-size: root.editor_font_size * 1px;
+                                            font-family: "Cascadia Code, Consolas, Courier New, monospace";
+                                            color: Theme.text_muted;
+                                            horizontal-alignment: right;
+                                        }
+                                    }
                                 }
 
-                                Rectangle {
-                                    x: 0px;
-                                    y: 0px;
-                                    width: parent.width;
-                                    height: parent.height;
-                                    clip: true;
+                                // Main Editor Scrollable Area
+                                editor_scroll := ScrollView {
+                                    horizontal-stretch: 1;
+                                    content-width: root.editor_line_wrap ? self.visible-width : max(self.visible-width, editor_input.preferred-width + 28px);
+                                    content-height: max(self.visible-height, editor_input.preferred-height + 28px);
 
-                                    Text {
-                                        x: 0px;
-                                        y: editor_scroll.content-y + 14px;
-                                        width: parent.width - 10px;
-                                        text: root.line_numbers_text;
-                                        font-size: root.editor_font_size * 1px;
-                                        font-family: "Cascadia Code, Consolas, Courier New, monospace";
-                                        color: Theme.text_muted;
-                                        horizontal-alignment: right;
+                                    Rectangle {
+                                        width: root.editor_line_wrap ? editor_scroll.visible-width : max(editor_scroll.visible-width, editor_input.preferred-width + 28px);
+                                        height: max(editor_scroll.visible-height, editor_input.preferred-height + 28px);
+
+                                        // Active Line Highlight
+                                        if root.editor_highlight_current_line : Rectangle {
+                                            x: 0px;
+                                            y: root.current_line_y + 14px;
+                                            width: parent.width;
+                                            height: (root.editor_font_size * 1.35) * 1px;
+                                            background: Theme.line_highlight;
+                                            border-radius: 2px;
+                                        }
+
+                                        editor_input := TextInput {
+                                            x: 14px;
+                                            y: 14px;
+                                            width: parent.width - 28px;
+                                            single-line: false;
+                                            wrap: root.editor_line_wrap ? TextWrap.word-wrap : TextWrap.no-wrap;
+                                            color: Theme.text_primary;
+                                            font-size: root.editor_font_size * 1px;
+                                            font-family: "Cascadia Code, Consolas, Courier New, monospace";
+                                            selection-background-color: Theme.accent;
+                                            selection-foreground-color: Theme.accent_text;
+                                            text <=> root.note_content;
+
+                                            edited => {
+                                                root.has_unsaved_changes = true;
+                                                root.note_content_edited(self.text);
+                                            }
+
+                                            cursor-position-changed(cpos) => {
+                                                root.current_line_y = cpos.y;
+
+                                                if !root.editor_line_wrap {
+                                                    if (cpos.x + editor_scroll.content-x < 0px) {
+                                                        editor_scroll.content-x = min(0px, max(editor_scroll.visible-width - self.width, -cpos.x));
+                                                    } else if (cpos.x + editor_scroll.content-x > editor_scroll.visible-width) {
+                                                        editor_scroll.content-x = min(0px, max(editor_scroll.visible-width - self.width, editor_scroll.visible-width - cpos.x));
+                                                    }
+                                                } else {
+                                                    editor_scroll.content-x = 0px;
+                                                }
+
+                                                if (cpos.y + editor_scroll.content-y < 0px) {
+                                                    editor_scroll.content-y = min(
+                                                        0px,
+                                                        editor_scroll.visible-height - cpos.y - (root.editor_font_size * 1.4 * 1px),
+                                                        max(editor_scroll.visible-height - self.height, -cpos.y),
+                                                    );
+                                                } else if (cpos.y + editor_scroll.content-y > editor_scroll.visible-height - (root.editor_font_size * 1.4 * 1px)) {
+                                                    editor_scroll.content-y = min(
+                                                        0px,
+                                                        max(editor_scroll.visible-height - self.height, editor_scroll.visible-height - cpos.y - (root.editor_font_size * 1.4 * 1px))
+                                                    );
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
+                        }
 
-                            // Main Editor Scrollable Area
-                            editor_scroll := ScrollView {
-                                horizontal-stretch: 1;
-                                content-width: root.editor_line_wrap ? self.visible-width : max(self.visible-width, editor_input.preferred-width + 28px);
-                                content-height: max(self.visible-height, editor_input.preferred-height + 28px);
+                        // 2. Markdown Rendered View
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width;
+                            height: parent.height;
+                            visible: root.editor_markdown_mode;
 
-                                Rectangle {
-                                    width: root.editor_line_wrap ? editor_scroll.visible-width : max(editor_scroll.visible-width, editor_input.preferred-width + 28px);
-                                    height: max(editor_scroll.visible-height, editor_input.preferred-height + 28px);
+                            markdown_scroll := ScrollView {
+                                width: parent.width;
+                                height: parent.height;
 
-                                    // Active Line Highlight
-                                    if root.editor_highlight_current_line : Rectangle {
-                                        x: 0px;
-                                        y: root.current_line_y + 14px;
-                                        width: parent.width;
-                                        height: (root.editor_font_size * 1.35) * 1px;
-                                        background: Theme.line_highlight;
-                                        border-radius: 2px;
+                                VerticalLayout {
+                                    width: 100%;
+                                    padding-left: 32px;
+                                    padding-right: 32px;
+                                    padding-top: 24px;
+                                    padding-bottom: 48px;
+                                    alignment: start;
+
+                                    if root.note_content == "" : Text {
+                                        text: "Empty note. Switch to Edit Mode to write markdown content.";
+                                        font-size: root.editor_font_size * 1px;
+                                        color: Theme.text_muted;
+                                        font-italic: true;
                                     }
 
-                                    editor_input := TextInput {
-                                        x: 14px;
-                                        y: 14px;
-                                        width: parent.width - 28px;
+                                    if root.note_content != "" && root.note_markdown_blocks.length == 0 : TextInput {
+                                        text: root.note_content;
+                                        read-only: true;
                                         single-line: false;
-                                        wrap: root.editor_line_wrap ? TextWrap.word-wrap : TextWrap.no-wrap;
-                                        color: Theme.text_primary;
+                                        wrap: word-wrap;
                                         font-size: root.editor_font_size * 1px;
-                                        font-family: "Cascadia Code, Consolas, Courier New, monospace";
+                                        color: Theme.text_primary;
                                         selection-background-color: Theme.accent;
                                         selection-foreground-color: Theme.accent_text;
-                                        text <=> root.note_content;
+                                    }
 
-                                        edited => {
-                                            root.has_unsaved_changes = true;
-                                            root.note_content_edited(self.text);
-                                        }
+                                    for block in root.note_markdown_blocks : VerticalLayout {
+                                        width: 100%;
+                                        spacing: 0px;
 
-                                        cursor-position-changed(cpos) => {
-                                            root.current_line_y = cpos.y;
+                                        // 0. Headings (# Heading)
+                                        if block.block_type == 0 : VerticalLayout {
+                                            padding-top: block.heading_level == 1 ? 24px : (block.heading_level == 2 ? 18px : 12px);
+                                            padding-bottom: 8px;
+                                            spacing: 6px;
 
-                                            if !root.editor_line_wrap {
-                                                if (cpos.x + editor_scroll.content-x < 0px) {
-                                                    editor_scroll.content-x = min(0px, max(editor_scroll.visible-width - self.width, -cpos.x));
-                                                } else if (cpos.x + editor_scroll.content-x > editor_scroll.visible-width) {
-                                                    editor_scroll.content-x = min(0px, max(editor_scroll.visible-width - self.width, editor_scroll.visible-width - cpos.x));
-                                                }
-                                            } else {
-                                                editor_scroll.content-x = 0px;
+                                            TextInput {
+                                                text: block.text;
+                                                read-only: true;
+                                                single-line: false;
+                                                wrap: word-wrap;
+                                                font-size: block.heading_level == 1 ? (root.editor_font_size * 1.8 * 1px) :
+                                                           (block.heading_level == 2 ? (root.editor_font_size * 1.4 * 1px) :
+                                                           (block.heading_level == 3 ? (root.editor_font_size * 1.2 * 1px) : (root.editor_font_size * 1.05 * 1px)));
+                                                font-weight: 700;
+                                                color: Theme.text_primary;
+                                                selection-background-color: Theme.accent;
+                                                selection-foreground-color: Theme.accent_text;
                                             }
 
-                                            if (cpos.y + editor_scroll.content-y < 0px) {
-                                                editor_scroll.content-y = min(
-                                                    0px,
-                                                    editor_scroll.visible-height - cpos.y - (root.editor_font_size * 1.4 * 1px),
-                                                    max(editor_scroll.visible-height - self.height, -cpos.y),
-                                                );
-                                            } else if (cpos.y + editor_scroll.content-y > editor_scroll.visible-height - (root.editor_font_size * 1.4 * 1px)) {
-                                                editor_scroll.content-y = min(
-                                                    0px,
-                                                    max(editor_scroll.visible-height - self.height, editor_scroll.visible-height - cpos.y - (root.editor_font_size * 1.4 * 1px))
-                                                );
+                                            if block.heading_level <= 2 : Rectangle {
+                                                height: 1px;
+                                                background: Theme.border;
+                                            }
+                                        }
+
+                                        // 1. Paragraphs & Lists (Selectable TextInput)
+                                        if block.block_type == 1 : VerticalLayout {
+                                            padding-bottom: 12px;
+                                            width: 100%;
+                                            TextInput {
+                                                text: block.text;
+                                                read-only: true;
+                                                single-line: false;
+                                                wrap: word-wrap;
+                                                font-size: root.editor_font_size * 1px;
+                                                color: Theme.text_primary;
+                                                selection-background-color: Theme.accent;
+                                                selection-foreground-color: Theme.accent_text;
+                                            }
+                                        }
+
+                                        // 2. Real Code Block (Container with language tag, dark background, rounded corners)
+                                        if block.block_type == 2 : VerticalLayout {
+                                            padding-top: 6px;
+                                            padding-bottom: 14px;
+
+                                            Rectangle {
+                                                background: Theme.is_dark ? #161b22 : #f6f8fa;
+                                                border-radius: 6px;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+
+                                                VerticalLayout {
+                                                    // Header bar
+                                                    Rectangle {
+                                                        height: 28px;
+                                                        background: Theme.is_dark ? #21262d : #e1e4e8;
+                                                        border-top-left-radius: 6px;
+                                                        border-top-right-radius: 6px;
+
+                                                        HorizontalLayout {
+                                                            padding-left: 12px;
+                                                            padding-right: 8px;
+                                                            alignment: space-between;
+
+                                                            Text {
+                                                                text: block.code_lang != "" ? block.code_lang : "code";
+                                                                font-size: 11px;
+                                                                color: Theme.text_secondary;
+                                                                font-weight: 600;
+                                                                vertical-alignment: center;
+                                                            }
+
+                                                            Rectangle {
+                                                                width: 56px;
+                                                                height: 22px;
+                                                                border-radius: 4px;
+                                                                background: copy_code_touch.has-hover ? (Theme.is_dark ? #30363d : #d0d7de) : Colors.transparent;
+                                                                animate background { duration: 100ms; }
+
+                                                                HorizontalLayout {
+                                                                    alignment: center;
+                                                                    spacing: 4px;
+                                                                    Image {
+                                                                        source: @image-url("../assets/icons/copy.svg");
+                                                                        width: 11px;
+                                                                        height: 11px;
+                                                                        colorize: copy_code_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                                                                        vertical-alignment: center;
+                                                                    }
+                                                                    Text {
+                                                                        text: "Copy";
+                                                                        font-size: 11px;
+                                                                        color: copy_code_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                                                                        vertical-alignment: center;
+                                                                    }
+                                                                }
+
+                                                                copy_code_touch := TouchArea {
+                                                                    mouse-cursor: pointer;
+                                                                    clicked => {
+                                                                        root.copy_text_to_clipboard(block.code_content);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Code content area
+                                                    HorizontalLayout {
+                                                        padding: 14px;
+                                                        TextInput {
+                                                            text: block.code_content;
+                                                            read-only: true;
+                                                            single-line: false;
+                                                            wrap: TextWrap.no-wrap;
+                                                            font-family: "\"Cascadia Code\", Consolas, monospace";
+                                                            font-size: root.editor_font_size * 0.92 * 1px;
+                                                            color: Theme.text_primary;
+                                                            selection-background-color: Theme.accent;
+                                                            selection-foreground-color: Theme.accent_text;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 3. Real Table (Grid with cell borders, header shading, alternating row colors)
+                                        if block.block_type == 3 : VerticalLayout {
+                                            padding-top: 6px;
+                                            padding-bottom: 14px;
+                                            width: 100%;
+
+                                            table_container := Rectangle {
+                                                width: 100%;
+                                                background: Theme.border;
+                                                border-radius: 6px;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                clip: true;
+
+                                                VerticalLayout {
+                                                    width: 100%;
+                                                    spacing: 1px;
+
+                                                    // Table Header
+                                                    HorizontalLayout {
+                                                        width: 100%;
+                                                        spacing: 1px;
+                                                        for cell[c_idx] in block.table_headers : Rectangle {
+                                                            width: (table_container.width - 2px - (block.table_headers.length - 1) * 1px) *
+                                                                   (c_idx < block.table_col_fractions.length ? block.table_col_fractions[c_idx] : (1.0 / max(1, block.table_headers.length)));
+                                                            background: Theme.is_dark ? #161b22 : #f6f8fa;
+                                                            HorizontalLayout {
+                                                                padding-left: 12px;
+                                                                padding-right: 12px;
+                                                                padding-top: 8px;
+                                                                padding-bottom: 8px;
+
+                                                                TextInput {
+                                                                    text: cell;
+                                                                    read-only: true;
+                                                                    wrap: word-wrap;
+                                                                    single-line: false;
+                                                                    font-weight: 700;
+                                                                    font-size: root.editor_font_size * 0.95 * 1px;
+                                                                    color: Theme.text_primary;
+                                                                    horizontal-alignment: (c_idx < block.table_alignments.length && block.table_alignments[c_idx] == 1) ? TextHorizontalAlignment.center :
+                                                                                         ((c_idx < block.table_alignments.length && block.table_alignments[c_idx] == 2) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left);
+                                                                    selection-background-color: Theme.accent;
+                                                                    selection-foreground-color: Theme.accent_text;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Table Rows
+                                                    for row[r_idx] in block.table_rows : HorizontalLayout {
+                                                        width: 100%;
+                                                        spacing: 1px;
+                                                        for cell[c_idx] in row.cells : Rectangle {
+                                                            width: (table_container.width - 2px - (block.table_headers.length - 1) * 1px) *
+                                                                   (c_idx < block.table_col_fractions.length ? block.table_col_fractions[c_idx] : (1.0 / max(1, block.table_headers.length)));
+                                                            background: mod(r_idx, 2) == 1 ? (Theme.is_dark ? #161b22 : #f6f8fa) : (Theme.is_dark ? #0d1117 : #ffffff);
+                                                            HorizontalLayout {
+                                                                padding-left: 12px;
+                                                                padding-right: 12px;
+                                                                padding-top: 8px;
+                                                                padding-bottom: 8px;
+
+                                                                TextInput {
+                                                                    text: cell;
+                                                                    read-only: true;
+                                                                    wrap: word-wrap;
+                                                                    single-line: false;
+                                                                    font-size: root.editor_font_size * 0.95 * 1px;
+                                                                    color: Theme.text_primary;
+                                                                    horizontal-alignment: (c_idx < block.table_alignments.length && block.table_alignments[c_idx] == 1) ? TextHorizontalAlignment.center :
+                                                                                         ((c_idx < block.table_alignments.length && block.table_alignments[c_idx] == 2) ? TextHorizontalAlignment.right : TextHorizontalAlignment.left);
+                                                                    selection-background-color: Theme.accent;
+                                                                    selection-foreground-color: Theme.accent_text;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 4. Real Blockquote (Selectable TextInput with accent bar)
+                                        if block.block_type == 4 : VerticalLayout {
+                                            padding-top: 4px;
+                                            padding-bottom: 10px;
+                                            width: 100%;
+
+                                            HorizontalLayout {
+                                                width: 100%;
+                                                Rectangle {
+                                                    width: 4px;
+                                                    background: Theme.accent;
+                                                    border-radius: 2px;
+                                                }
+                                                HorizontalLayout {
+                                                    padding-left: 14px;
+                                                    TextInput {
+                                                        text: block.text;
+                                                        read-only: true;
+                                                        single-line: false;
+                                                        wrap: word-wrap;
+                                                        font-size: root.editor_font_size * 1px;
+                                                        color: Theme.text_secondary;
+                                                        font-italic: true;
+                                                        selection-background-color: Theme.accent;
+                                                        selection-foreground-color: Theme.accent_text;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 5. Real Math Block (formula centered with distinct mathematical display)
+                                        if block.block_type == 5 : VerticalLayout {
+                                            padding-top: 8px;
+                                            padding-bottom: 12px;
+
+                                            Rectangle {
+                                                background: Theme.is_dark ? #161b22 : #f6f8fa;
+                                                border-radius: 6px;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+
+                                                HorizontalLayout {
+                                                    padding: 14px;
+                                                    alignment: center;
+                                                    TextInput {
+                                                        text: block.text;
+                                                        read-only: true;
+                                                        single-line: false;
+                                                        font-family: "\"Cambria Math\", \"Latin Modern Math\", \"Cascadia Code\", serif";
+                                                        font-size: root.editor_font_size * 1.25 * 1px;
+                                                        color: Theme.text_primary;
+                                                        horizontal-alignment: center;
+                                                        selection-background-color: Theme.accent;
+                                                        selection-foreground-color: Theme.accent_text;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // 6. Horizontal Rule
+                                        if block.block_type == 6 : VerticalLayout {
+                                            padding-top: 14px;
+                                            padding-bottom: 14px;
+                                            Rectangle {
+                                                height: 1px;
+                                                background: Theme.border;
+                                            }
+                                        }
+
+                                        // 7. Task Item (Selectable TextInput with checkbox)
+                                        if block.block_type == 7 : HorizontalLayout {
+                                            padding-bottom: 6px;
+                                            spacing: 8px;
+                                            alignment: start;
+                                            width: 100%;
+
+                                            Rectangle {
+                                                width: 16px;
+                                                height: 16px;
+                                                border-radius: 3px;
+                                                border-width: 1px;
+                                                border-color: block.is_task_checked ? Theme.accent : Theme.border;
+                                                background: block.is_task_checked ? Theme.accent : Colors.transparent;
+
+                                                if block.is_task_checked : Text {
+                                                    text: "✓";
+                                                    font-size: 11px;
+                                                    color: Theme.accent_text;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+
+                                            TextInput {
+                                                text: block.text;
+                                                read-only: true;
+                                                single-line: false;
+                                                wrap: word-wrap;
+                                                font-size: root.editor_font_size * 1px;
+                                                color: Theme.text_primary;
+                                                selection-background-color: Theme.accent;
+                                                selection-foreground-color: Theme.accent_text;
                                             }
                                         }
                                     }

@@ -21,10 +21,14 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub mod config;
 pub mod export;
+pub mod markdown;
 pub mod startup;
 pub mod validation;
 
+slint::include_modules!();
+
 pub use export::*;
+pub use markdown::*;
 pub use startup::*;
 pub use validation::*;
 
