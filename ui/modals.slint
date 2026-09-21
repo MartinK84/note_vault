@@ -48,14 +48,14 @@ export component UnlockModal inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 440px;
-        height: root.show_keyfile_browse ? 245px : (root.error_message != "" ? 205px : 185px);
+        height: content_layout.preferred-height;
         background: Theme.bg_surface;
         border-radius: 12px;
         border-width: 1px;
         border-color: Theme.border_active;
         clip: true;
 
-        VerticalLayout {
+        content_layout := VerticalLayout {
             padding-top: 16px;
             padding-bottom: 16px;
             padding-left: 24px;
