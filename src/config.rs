@@ -1,7 +1,97 @@
 use std::error::Error;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+
+/// Expands environment variables in `s` (both `%VAR%` on Windows and `$VAR`/`${VAR}` on
+/// Unix-style syntax) and then resolves the result to an absolute path by joining it onto the
+/// current working directory when it is relative.
+pub fn expand_path(s: &str) -> PathBuf {
+    // --- 1. Expand %VAR% placeholders (Windows style) ---
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            // Collect until the closing '%'
+            let mut var_name = String::new();
+            let mut closed = false;
+            for inner in chars.by_ref() {
+                if inner == '%' {
+                    closed = true;
+                    break;
+                }
+                var_name.push(inner);
+            }
+            if closed && !var_name.is_empty() {
+                // Look up the env var; fall back to the original token if not set
+                match std::env::var(&var_name) {
+                    Ok(val) => result.push_str(&val),
+                    Err(_) => {
+                        result.push('%');
+                        result.push_str(&var_name);
+                        result.push('%');
+                    }
+                }
+            } else {
+                // Unmatched '%' – keep verbatim
+                result.push('%');
+                result.push_str(&var_name);
+            }
+        } else if ch == '$' {
+            // --- 2. Expand $VAR and ${VAR} placeholders (Unix style) ---
+            let braced = chars.peek() == Some(&'{');
+            if braced {
+                chars.next(); // consume '{'
+            }
+            let mut var_name = String::new();
+            if braced {
+                for inner in chars.by_ref() {
+                    if inner == '}' {
+                        break;
+                    }
+                    var_name.push(inner);
+                }
+            } else {
+                // Unbraced: collect alphanumerics and '_'
+                while let Some(&c) = chars.peek() {
+                    if c.is_alphanumeric() || c == '_' {
+                        var_name.push(c);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if !var_name.is_empty() {
+                match std::env::var(&var_name) {
+                    Ok(val) => result.push_str(&val),
+                    Err(_) => {
+                        if braced {
+                            result.push_str("${");
+                            result.push_str(&var_name);
+                            result.push('}');
+                        } else {
+                            result.push('$');
+                            result.push_str(&var_name);
+                        }
+                    }
+                }
+            } else {
+                result.push('$');
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    // --- 3. Resolve relative paths against CWD ---
+    let p = PathBuf::from(&result);
+    if p.is_absolute() {
+        p
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(p)
+    }
+}
 
 fn default_multithreading() -> bool {
     true
@@ -123,6 +213,18 @@ impl AppConfig {
         fs::write(path, json_data)?;
         Ok(())
     }
+
+    /// Returns the vault path with environment variables expanded and relative paths resolved
+    /// to absolute paths based on the current working directory.
+    pub fn resolved_vault_path(&self) -> PathBuf {
+        expand_path(&self.vault_path)
+    }
+
+    /// Returns the keyfile path (if set) with environment variables expanded and relative paths
+    /// resolved to absolute paths based on the current working directory.
+    pub fn resolved_keyfile_path(&self) -> Option<PathBuf> {
+        self.keyfile_path.as_deref().map(expand_path)
+    }
 }
 
 #[cfg(test)]
@@ -210,5 +312,91 @@ mod tests {
 
             let _ = fs::remove_dir_all(&temp_dir);
         }
+    }
+
+    #[test]
+    fn test_expand_path_absolute_unchanged() {
+        // An already-absolute path should come back unchanged (modulo platform separators).
+        let abs = if cfg!(windows) { "C:\\Users\\test\\vault" } else { "/home/test/vault" };
+        let result = expand_path(abs);
+        assert!(result.is_absolute(), "Expected absolute path, got: {:?}", result);
+        assert_eq!(result, PathBuf::from(abs));
+    }
+
+    #[test]
+    fn test_expand_path_relative_becomes_absolute() {
+        let result = expand_path("vault");
+        assert!(result.is_absolute(), "Relative path should be made absolute, got: {:?}", result);
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(result, cwd.join("vault"));
+    }
+
+    #[test]
+    fn test_expand_path_percent_var() {
+        // Set a known env var and confirm %VAR% is expanded.
+        unsafe { std::env::set_var("NV_TEST_VAR", "expanded_value"); }
+        let result = expand_path("%NV_TEST_VAR%\\subdir");
+        unsafe { std::env::remove_var("NV_TEST_VAR"); }
+        let result_str = result.to_string_lossy();
+        assert!(
+            result_str.contains("expanded_value"),
+            "Expected expansion of %NV_TEST_VAR%, got: {}",
+            result_str
+        );
+    }
+
+    #[test]
+    fn test_expand_path_dollar_var() {
+        unsafe { std::env::set_var("NV_TEST_VAR2", "dollar_expanded"); }
+        let result = expand_path("$NV_TEST_VAR2/subdir");
+        unsafe { std::env::remove_var("NV_TEST_VAR2"); }
+        let result_str = result.to_string_lossy();
+        assert!(
+            result_str.contains("dollar_expanded"),
+            "Expected expansion of $NV_TEST_VAR2, got: {}",
+            result_str
+        );
+    }
+
+    #[test]
+    fn test_expand_path_dollar_braced_var() {
+        unsafe { std::env::set_var("NV_TEST_VAR3", "braced_expanded"); }
+        let result = expand_path("${NV_TEST_VAR3}/subdir");
+        unsafe { std::env::remove_var("NV_TEST_VAR3"); }
+        let result_str = result.to_string_lossy();
+        assert!(
+            result_str.contains("braced_expanded"),
+            "Expected expansion of ${{NV_TEST_VAR3}}, got: {}",
+            result_str
+        );
+    }
+
+    #[test]
+    fn test_expand_path_unknown_var_kept_verbatim() {
+        // An unknown %VAR% should be left as-is in the output.
+        let result = expand_path("%DEFINITELY_NOT_SET_NV_VAR%\\subdir");
+        let result_str = result.to_string_lossy();
+        assert!(
+            result_str.contains("DEFINITELY_NOT_SET_NV_VAR"),
+            "Unknown var should be kept verbatim, got: {}",
+            result_str
+        );
+    }
+
+    #[test]
+    fn test_resolved_vault_path_relative() {
+        let config = AppConfig {
+            vault_path: "vault".to_string(),
+            ..AppConfig::default()
+        };
+        let resolved = config.resolved_vault_path();
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with("vault"));
+    }
+
+    #[test]
+    fn test_resolved_keyfile_path_none() {
+        let config = AppConfig::default();
+        assert_eq!(config.resolved_keyfile_path(), None);
     }
 }

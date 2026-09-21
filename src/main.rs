@@ -977,7 +977,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.vault_path.clone()
     };
 
-    let initial_vault_path = PathBuf::from(&initial_vault_path_str);
+    // Resolve env vars and relative paths; keep the raw string for the UI display
+    let initial_vault_path = if args.vault_path.is_some() {
+        PathBuf::from(&initial_vault_path_str)
+    } else {
+        config.resolved_vault_path()
+    };
+    let initial_vault_path_display = initial_vault_path.to_string_lossy().to_string();
 
     // Shared state
     let app_config = Arc::new(Mutex::new(config.clone()));
@@ -1020,7 +1026,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_theme_options(theme_options_model);
 
     // Initialize Settings state
-    main_window.set_settings_vault_path(initial_vault_path_str.as_str().into());
+    main_window.set_settings_vault_path(initial_vault_path_display.as_str().into());
     main_window.set_settings_use_multithreading(config.use_multithreading);
     main_window.set_settings_global_hotkey(config.global_hotkey.as_str().into());
     main_window.set_settings_minimize_to_tray(config.minimize_to_tray);
@@ -1033,11 +1039,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_line_numbers_text("1".into());
 
     // Check keyfile on startup if configured
-    if let Some(ref kpath) = config.keyfile_path {
-        let p = Path::new(kpath);
-        if !p.exists() {
+    if let Some(kpath) = config.resolved_keyfile_path() {
+        if !kpath.exists() {
             main_window.set_unlock_error_message(
-                format!("Keyfile missing at {}. Please locate it.", kpath).into(),
+                format!("Keyfile missing at {}. Please locate it.", kpath.display()).into(),
             );
             main_window.set_show_keyfile_browse(true);
         }
@@ -2342,16 +2347,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let keyfile_data = {
                 let cfg = app_config.lock().unwrap();
-                if let Some(ref kpath) = cfg.keyfile_path {
-                    let p = Path::new(kpath);
-                    if !p.exists() {
+                if let Some(kpath) = cfg.resolved_keyfile_path() {
+                    if !kpath.exists() {
                         ui.set_unlock_error_message(
-                            format!("Keyfile missing at {}. Please locate it.", kpath).into(),
+                            format!("Keyfile missing at {}. Please locate it.", kpath.display()).into(),
                         );
                         ui.set_show_keyfile_browse(true);
                         return;
                     }
-                    match std::fs::read(p) {
+                    match std::fs::read(&kpath) {
                         Ok(data) => Some(Zeroizing::new(data)),
                         Err(e) => {
                             ui.set_unlock_error_message(
