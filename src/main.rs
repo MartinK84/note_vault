@@ -1183,6 +1183,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_editor_markdown_mode(false);
     main_window.set_line_numbers_text("1".into());
 
+    // Initialize column widths from config
+    main_window.set_folder_pane_width(config.folder_pane_width as f32);
+    main_window.set_notes_pane_width(config.notes_pane_width as f32);
+
     // Check keyfile on startup if configured
     if let Some(kpath) = config.resolved_keyfile_path() {
         if !kpath.exists() {
@@ -3769,6 +3773,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Err(e) = cfg.save() {
                 eprintln!("[Config] Failed to save editor setting: {}", e);
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Column Width Changed (Persist pane widths to config.json)
+    // -------------------------------------------------------------
+    main_window.on_column_width_changed({
+        let app_config = Arc::clone(&app_config);
+        move |pane, width_px| {
+            let w = width_px.round() as u32;
+            let mut cfg = app_config.lock().unwrap();
+            match pane.as_str() {
+                "folder" => cfg.folder_pane_width = w,
+                "notes"  => cfg.notes_pane_width = w,
+                _ => {}
+            }
+            if let Err(e) = cfg.save() {
+                eprintln!("[Config] Failed to save column width: {}", e);
             }
         }
     });

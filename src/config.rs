@@ -129,6 +129,14 @@ fn default_editor_markdown_mode() -> bool {
     false
 }
 
+fn default_folder_pane_width() -> u32 {
+    210
+}
+
+fn default_notes_pane_width() -> u32 {
+    300
+}
+
 /// Persistent configuration for NoteVault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -167,6 +175,12 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub launch_at_startup: bool,
+
+    #[serde(default = "default_folder_pane_width")]
+    pub folder_pane_width: u32,
+
+    #[serde(default = "default_notes_pane_width")]
+    pub notes_pane_width: u32,
 }
 
 impl Default for AppConfig {
@@ -184,6 +198,8 @@ impl Default for AppConfig {
             editor_font_size: default_editor_font_size(),
             editor_markdown_mode: default_editor_markdown_mode(),
             launch_at_startup: false,
+            folder_pane_width: default_folder_pane_width(),
+            notes_pane_width: default_notes_pane_width(),
         }
     }
 }
@@ -259,6 +275,8 @@ mod tests {
         assert_eq!(config.editor_font_size, 14);
         assert!(!config.editor_markdown_mode);
         assert!(!config.launch_at_startup);
+        assert_eq!(config.folder_pane_width, 210);
+        assert_eq!(config.notes_pane_width, 300);
     }
 
     #[test]
@@ -279,6 +297,8 @@ mod tests {
             editor_font_size: 18,
             editor_markdown_mode: true,
             launch_at_startup: true,
+            folder_pane_width: 250,
+            notes_pane_width: 350,
         };
 
         config.save_to_path(&config_path).expect("Saving config should succeed");
@@ -311,6 +331,8 @@ mod tests {
         assert_eq!(loaded.editor_font_size, 14);
         assert!(!loaded.editor_markdown_mode);
         assert!(!loaded.launch_at_startup);
+        assert_eq!(loaded.folder_pane_width, 210);
+        assert_eq!(loaded.notes_pane_width, 300);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

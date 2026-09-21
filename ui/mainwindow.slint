@@ -236,18 +236,47 @@ export component MainWindow inherits Window {
     callback note_content_edited(string);
     callback copy_text_to_clipboard(string);
 
+    // Column resize callbacks & state
+    in-out property <length> folder_pane_width: 210px;
+    in-out property <length> notes_pane_width: 300px;
+    callback column_width_changed(string, float); // ("folder" | "notes", new_width_px)
+
+    // Drag handle internal state (stored on root to be accessible from nested elements)
+    private property <bool> dragger1_active: false;
+    private property <length> dragger1_start_x: 0px;  // mouse-x within dragger at pointer-down
+    private property <length> dragger1_frozen_x: 0px; // dragger absolute x at pointer-down (stays fixed during drag)
+    private property <length> dragger1_start_w: 0px;
+    private property <bool> dragger2_active: false;
+    private property <length> dragger2_start_x: 0px;
+    private property <length> dragger2_frozen_x: 0px;
+    private property <length> dragger2_start_w: 0px;
+
     // ==========================================
     // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
     // ==========================================
-    HorizontalLayout {
-        padding: 8px;
-        spacing: 8px;
+    // Outer container drives the absolute layout
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+
+        // Computed positions (8px outer padding, 6px dragger width)
+        // x1 = 8px (padding)
+        // x_drag1 = 8px + folder_pane_width
+        // x2 = 8px + folder_pane_width + 6px
+        // x_drag2 = 8px + folder_pane_width + 6px + notes_pane_width
+        // x3 = 8px + folder_pane_width + 6px + notes_pane_width + 6px
+        // w3 = total - x3 - 8px (right padding)
 
         // -------------------------------------------------------------
-        // PANE 1: FOLDERS LIST (Fixed ~210px)
+        // PANE 1: FOLDERS LIST
         // -------------------------------------------------------------
         Rectangle {
-            width: 210px;
+            x: 8px;
+            y: 8px;
+            width: root.folder_pane_width;
+            height: parent.height - 16px;
             background: Theme.bg_secondary;
             border-radius: 8px;
             border-width: 1px;
@@ -839,10 +868,63 @@ export component MainWindow inherits Window {
         }
 
         // -------------------------------------------------------------
-        // PANE 2: NOTES LIST (Fixed ~300px)
+        // DRAG HANDLE 1: between Folder pane and Notes pane
         // -------------------------------------------------------------
         Rectangle {
-            width: 300px;
+            // Freeze position during drag so self.mouse-x stays stable (prevents oscillation)
+            x: root.dragger1_active ? root.dragger1_frozen_x : 8px + root.folder_pane_width;
+            y: 8px;
+            width: 6px;
+            height: parent.height - 16px;
+            background: Colors.transparent;
+
+            // Visible grabber dot (center)
+            Rectangle {
+                x: 2px;
+                y: (parent.height - self.height) / 2;
+                width: 2px;
+                height: 24px;
+                border-radius: 1px;
+                background: dragger1_touch.has-hover || root.dragger1_active ? Theme.accent : Theme.border;
+                animate background { duration: 120ms; }
+            }
+
+            dragger1_touch := TouchArea {
+                mouse-cursor: col-resize;
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.down {
+                        // Capture frozen position BEFORE activating (so x binding hasn't switched yet)
+                        root.dragger1_frozen_x = parent.x;
+                        root.dragger1_start_x = self.mouse-x;
+                        root.dragger1_start_w = root.folder_pane_width;
+                        root.dragger1_active = true;
+                    } else if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel {
+                        if root.dragger1_active {
+                            root.column_width_changed("folder", root.folder_pane_width / 1px);
+                        }
+                        root.dragger1_active = false;
+                    }
+                }
+                moved => {
+                    if root.dragger1_active {
+                        // self.mouse-x is relative to the frozen dragger position, so delta is stable
+                        let raw = root.dragger1_start_w + (self.mouse-x - root.dragger1_start_x);
+                        let avail = root.width - 16px - 12px;
+                        let max_w = avail - 150px - 150px;
+                        root.folder_pane_width = raw < 150px ? 150px : (raw > max_w ? max_w : raw);
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------
+        // PANE 2: NOTES LIST
+        // -------------------------------------------------------------
+        Rectangle {
+            x: 8px + root.folder_pane_width + 6px;
+            y: 8px;
+            width: root.notes_pane_width;
+            height: parent.height - 16px;
             background: Theme.bg_surface;
             border-radius: 8px;
             border-width: 1px;
@@ -1129,10 +1211,61 @@ export component MainWindow inherits Window {
         }
 
         // -------------------------------------------------------------
+        // DRAG HANDLE 2: between Notes pane and Editor pane
+        // -------------------------------------------------------------
+        Rectangle {
+            // Freeze position during drag so self.mouse-x stays stable (prevents oscillation)
+            x: root.dragger2_active ? root.dragger2_frozen_x : 8px + root.folder_pane_width + 6px + root.notes_pane_width;
+            y: 8px;
+            width: 6px;
+            height: parent.height - 16px;
+            background: Colors.transparent;
+
+            // Visible grabber dot (center)
+            Rectangle {
+                x: 2px;
+                y: (parent.height - self.height) / 2;
+                width: 2px;
+                height: 24px;
+                border-radius: 1px;
+                background: dragger2_touch.has-hover || root.dragger2_active ? Theme.accent : Theme.border;
+                animate background { duration: 120ms; }
+            }
+
+            dragger2_touch := TouchArea {
+                mouse-cursor: col-resize;
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.down {
+                        root.dragger2_frozen_x = parent.x;
+                        root.dragger2_start_x = self.mouse-x;
+                        root.dragger2_start_w = root.notes_pane_width;
+                        root.dragger2_active = true;
+                    } else if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel {
+                        if root.dragger2_active {
+                            root.column_width_changed("notes", root.notes_pane_width / 1px);
+                        }
+                        root.dragger2_active = false;
+                    }
+                }
+                moved => {
+                    if root.dragger2_active {
+                        let raw = root.dragger2_start_w + (self.mouse-x - root.dragger2_start_x);
+                        let avail = root.width - 16px - 12px;
+                        let max_w = avail - root.folder_pane_width - 150px;
+                        root.notes_pane_width = raw < 150px ? 150px : (raw > max_w ? max_w : raw);
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------
         // PANE 3: EDITOR (Flexible Width)
         // -------------------------------------------------------------
         Rectangle {
-            horizontal-stretch: 1;
+            x: 8px + root.folder_pane_width + 6px + root.notes_pane_width + 6px;
+            y: 8px;
+            width: parent.width - self.x - 8px;
+            height: parent.height - 16px;
             background: Theme.bg_main;
             border-radius: 8px;
             border-width: 1px;
