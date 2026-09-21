@@ -140,6 +140,67 @@ fn filter_quick_search_results(
         .collect()
 }
 
+/// Summary representation of a tag suggestion with note occurrence count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TagCount {
+    pub name: String,
+    pub count: usize,
+}
+
+/// Retrieves unique tags across all notes in `metadata_store`, excluding tags
+/// already assigned to `current_note_tags` (case-insensitive).
+/// Filters by `query` substring (case-insensitive), and sorts by frequency descending,
+/// then alphabetically.
+fn get_suggested_tags(
+    metadata_store: &HashMap<String, NoteMetaSummary>,
+    current_note_tags: &[String],
+    query: &str,
+) -> Vec<TagCount> {
+    let current_tags_lower: std::collections::HashSet<String> = current_note_tags
+        .iter()
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    let mut tag_counts: HashMap<String, (String, usize)> = HashMap::new();
+
+    for meta in metadata_store.values() {
+        let mut note_seen = std::collections::HashSet::new();
+        for tag in &meta.tags {
+            let trimmed = tag.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let lower = trimmed.to_lowercase();
+            if note_seen.insert(lower.clone()) {
+                let entry = tag_counts
+                    .entry(lower)
+                    .or_insert_with(|| (trimmed.to_string(), 0));
+                entry.1 += 1;
+            }
+        }
+    }
+
+    let q = query.trim().to_lowercase();
+    let mut suggestions: Vec<TagCount> = tag_counts
+        .into_iter()
+        .filter(|(lower, _)| !current_tags_lower.contains(lower))
+        .filter(|(lower, _)| q.is_empty() || lower.contains(&q))
+        .map(|(_, (display_name, count))| TagCount {
+            name: display_name,
+            count,
+        })
+        .collect();
+
+    suggestions.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    suggestions
+}
+
 /// Parses and normalizes a global hotkey string (e.g. "Shift + Space", "ctrl+shift+k", "Alt+Space").
 pub fn parse_hotkey_string(s: &str) -> Result<(HotKey, String), String> {
     let trimmed = s.trim();
@@ -3577,6 +3638,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_note_tags(new_model);
                 ui.set_has_unsaved_changes(true);
             }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Open Add Tag Modal Requested
+    // -------------------------------------------------------------
+    main_window.on_open_add_tag_requested({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let store = metadata_store.lock().unwrap();
+            let current_tags: Vec<String> = ui
+                .get_note_tags()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let suggestions = get_suggested_tags(&store, &current_tags, "");
+            let slint_suggestions: Vec<TagSuggestion> = suggestions
+                .into_iter()
+                .map(|s| TagSuggestion {
+                    name: s.name.into(),
+                    count: s.count as i32,
+                })
+                .collect();
+            ui.set_suggested_tags(std::rc::Rc::new(slint::VecModel::from(slint_suggestions)).into());
+            ui.set_new_tag_name("".into());
+            ui.set_add_tag_selected_index(-1);
+            ui.set_show_add_tag_modal(true);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Tag Search Changed while typing in Add Tag Modal
+    // -------------------------------------------------------------
+    main_window.on_tag_search_changed({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+
+        move |query| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let store = metadata_store.lock().unwrap();
+            let current_tags: Vec<String> = ui
+                .get_note_tags()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let suggestions = get_suggested_tags(&store, &current_tags, query.as_str());
+            let slint_suggestions: Vec<TagSuggestion> = suggestions
+                .into_iter()
+                .map(|s| TagSuggestion {
+                    name: s.name.into(),
+                    count: s.count as i32,
+                })
+                .collect();
+            ui.set_suggested_tags(std::rc::Rc::new(slint::VecModel::from(slint_suggestions)).into());
+            ui.set_add_tag_selected_index(-1);
         }
     });
 

@@ -1,4 +1,4 @@
-import { Button, LineEdit, ProgressIndicator, ComboBox, Palette } from "std-widgets.slint";
+import { Button, LineEdit, ProgressIndicator, ComboBox, Palette, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 component ModalCloseButton inherits Rectangle {
@@ -894,6 +894,11 @@ export component MoveNoteModal inherits Rectangle {
 // ==========================================
 // MODAL: ADD TAG
 // ==========================================
+export struct TagSuggestion {
+    name: string,
+    count: int,
+}
+
 export component AddTagModal inherits Rectangle {
     x: 0px;
     y: 0px;
@@ -902,93 +907,302 @@ export component AddTagModal inherits Rectangle {
     background: Theme.overlay;
 
     in-out property <string> tag_name: "";
+    in property <[TagSuggestion]> suggested_tags: [];
+    in-out property <int> selected_index: -1;
+
     callback cancel();
     callback add(string);
+    callback tag_input_changed(string);
+
+    public function focus_input() {
+        tag_input.focus();
+    }
+
+    init => {
+        tag_input.focus();
+    }
 
     TouchArea {}
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 320px;
-        height: 135px;
-        background: Theme.bg_surface;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.border_active;
-        clip: true;
+    fs := FocusScope {
+        width: 100%;
+        height: 100%;
 
-        VerticalLayout {
-            padding-top: 14px;
-            padding-bottom: 14px;
-            padding-left: 20px;
-            padding-right: 20px;
-            spacing: 12px;
-            alignment: start;
-
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                cross-axis-alignment: center;
-
-                Image {
-                    source: @image-url("../assets/icons/tag.svg");
-                    width: 18px;
-                    height: 18px;
-                    colorize: Theme.accent;
-                }
-
-                Text {
-                    text: "Add Tag";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: Theme.text_primary;
-                    vertical-alignment: center;
-                }
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancel();
+                return accept;
             }
-
-            tag_input := LineEdit {
-                height: 28px;
-                font-size: 13px;
-                text <=> root.tag_name;
-                placeholder-text: "Tag name...";
-                accepted => {
-                    if root.tag_name != "" {
-                        root.add(root.tag_name);
+            if event.text == Key.UpArrow {
+                if root.suggested_tags.length > 0 {
+                    if root.selected_index > 0 {
+                        root.selected_index -= 1;
+                    } else {
+                        root.selected_index = -1;
                     }
                 }
+                return accept;
             }
-
-            HorizontalLayout {
-                spacing: 10px;
-
-                Button {
-                    height: 28px;
-                    text: "Cancel";
-                    horizontal-stretch: 1;
-                    clicked => {
-                        root.cancel();
-                    }
+            if event.text == Key.DownArrow {
+                if root.suggested_tags.length > 0 {
+                    root.selected_index = min(root.suggested_tags.length - 1, root.selected_index + 1);
                 }
-
-                Button {
-                    height: 28px;
-                    text: "Add";
-                    primary: true;
-                    enabled: root.tag_name != "";
-                    horizontal-stretch: 1;
-                    clicked => {
-                        root.add(root.tag_name);
-                    }
+                return accept;
+            }
+            if event.text == Key.Return {
+                if root.selected_index >= 0 && root.selected_index < root.suggested_tags.length {
+                    root.add(root.suggested_tags[root.selected_index].name);
+                    return accept;
+                } else if root.tag_name != "" {
+                    root.add(root.tag_name);
+                    return accept;
                 }
             }
+            reject
         }
 
-        ModalCloseButton {
-            x: parent.width - self.width - 12px;
-            y: 12px;
-            clicked => {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
                 root.cancel();
+                return accept;
+            }
+            reject
+        }
+
+        modal_box := Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 380px;
+            height: 350px;
+            background: Theme.bg_surface;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border_active;
+            clip: true;
+
+            VerticalLayout {
+                padding-top: 14px;
+                padding-bottom: 14px;
+                padding-left: 18px;
+                padding-right: 18px;
+                spacing: 8px;
+
+                // Header
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    height: 24px;
+
+                    Image {
+                        source: @image-url("../assets/icons/tag.svg");
+                        width: 18px;
+                        height: 18px;
+                        colorize: Theme.accent;
+                    }
+
+                    Text {
+                        text: "Add Tag";
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // LineEdit
+                tag_input := LineEdit {
+                    height: 28px;
+                    font-size: 13px;
+                    text <=> root.tag_name;
+                    placeholder-text: "Tag name or search existing...";
+                    edited(text) => {
+                        root.selected_index = -1;
+                        root.tag_input_changed(text);
+                    }
+                    accepted => {
+                        if root.selected_index >= 0 && root.selected_index < root.suggested_tags.length {
+                            root.add(root.suggested_tags[root.selected_index].name);
+                        } else if root.tag_name != "" {
+                            root.add(root.tag_name);
+                        }
+                    }
+                }
+
+                // Subtitle / section label
+                HorizontalLayout {
+                    height: 16px;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        text: "EXISTING TAGS";
+                        font-size: 10px;
+                        font-weight: 700;
+                        color: Theme.text_muted;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    if root.suggested_tags.length > 0 : Text {
+                        text: root.suggested_tags.length + (root.suggested_tags.length == 1 ? " match" : " matches");
+                        font-size: 10px;
+                        color: Theme.text_muted;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Scrollable Suggestions List
+                ScrollView {
+                    vertical-stretch: 1;
+                    min-height: 160px;
+
+                    VerticalLayout {
+                        spacing: 3px;
+                        padding-right: 4px;
+                        alignment: start;
+
+                        if root.suggested_tags.length == 0 : Rectangle {
+                            height: 140px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 4px;
+
+                                Text {
+                                    text: root.tag_name == "" ? "No tags found on other notes" : "No existing tags match \"" + root.tag_name + "\"";
+                                    font-size: 12px;
+                                    color: Theme.text_muted;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+
+                                if root.tag_name != "" : Text {
+                                    text: "Press Enter or 'Add' to create new tag";
+                                    font-size: 11px;
+                                    color: Theme.accent;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        if root.suggested_tags.length > 0 : VerticalLayout {
+                            spacing: 3px;
+
+                            for suggestion[idx] in root.suggested_tags : Rectangle {
+                                height: 28px;
+                                border-radius: 6px;
+                                background: idx == root.selected_index ? Theme.bg_active : (item_touch.has-hover ? Theme.hover : Colors.transparent);
+
+                                item_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.add(suggestion.name);
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 8px;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/tag.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: idx == root.selected_index ? Theme.accent : Theme.text_secondary;
+                                    }
+
+                                    Text {
+                                        text: suggestion.name;
+                                        font-size: 12px;
+                                        font-weight: idx == root.selected_index ? 700 : 500;
+                                        color: Theme.text_primary;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
+
+                                    Rectangle {
+                                        background: Theme.bg_secondary;
+                                        border-radius: 4px;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        height: 18px;
+
+                                        HorizontalLayout {
+                                            padding-left: 5px;
+                                            padding-right: 5px;
+
+                                            Text {
+                                                text: suggestion.count == 1 ? "1 note" : (suggestion.count + " notes");
+                                                font-size: 10px;
+                                                color: Theme.text_muted;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    if item_touch.has-hover || idx == root.selected_index : Text {
+                                        text: "+ Add";
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Separator
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                }
+
+                // Footer Buttons
+                HorizontalLayout {
+                    spacing: 10px;
+                    height: 28px;
+
+                    Button {
+                        height: 28px;
+                        text: "Cancel";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.cancel();
+                        }
+                    }
+
+                    Button {
+                        height: 28px;
+                        text: "Add";
+                        primary: true;
+                        enabled: root.tag_name != "" || (root.selected_index >= 0 && root.selected_index < root.suggested_tags.length);
+                        horizontal-stretch: 1;
+                        clicked => {
+                            if root.selected_index >= 0 && root.selected_index < root.suggested_tags.length {
+                                root.add(root.suggested_tags[root.selected_index].name);
+                            } else if root.tag_name != "" {
+                                root.add(root.tag_name);
+                            }
+                        }
+                    }
+                }
+            }
+
+            ModalCloseButton {
+                x: parent.width - self.width - 12px;
+                y: 12px;
+                clicked => {
+                    root.cancel();
+                }
             }
         }
     }

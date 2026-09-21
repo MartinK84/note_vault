@@ -147,3 +147,147 @@ fn test_args_minimized_flag_parsing() {
     assert_eq!(args3.vault_path, Some(PathBuf::from("C:\\my_vault")));
 }
 
+#[test]
+fn test_get_suggested_tags_empty_store() {
+    let store = HashMap::new();
+    let current_tags = vec!["work".to_string()];
+    let suggestions = get_suggested_tags(&store, &current_tags, "");
+    assert!(suggestions.is_empty());
+}
+
+#[test]
+fn test_get_suggested_tags_aggregation_and_counts() {
+    let mut store = HashMap::new();
+
+    store.insert(
+        "note-1".to_string(),
+        NoteMetaSummary {
+            title: "Note 1".to_string(),
+            category: "General".to_string(),
+            tags: vec!["Rust".to_string(), "Slint".to_string(), "GUI".to_string()],
+            date: "2026-01-01".to_string(),
+            updated_at: 100,
+            file_path: PathBuf::from("/vault/note-1.vault"),
+        },
+    );
+
+    store.insert(
+        "note-2".to_string(),
+        NoteMetaSummary {
+            title: "Note 2".to_string(),
+            category: "General".to_string(),
+            tags: vec!["rust".to_string(), "crypto".to_string()],
+            date: "2026-01-02".to_string(),
+            updated_at: 200,
+            file_path: PathBuf::from("/vault/note-2.vault"),
+        },
+    );
+
+    store.insert(
+        "note-3".to_string(),
+        NoteMetaSummary {
+            title: "Note 3".to_string(),
+            category: "Work".to_string(),
+            tags: vec!["crypto".to_string(), "Security".to_string(), "Rust".to_string()],
+            date: "2026-01-03".to_string(),
+            updated_at: 300,
+            file_path: PathBuf::from("/vault/note-3.vault"),
+        },
+    );
+
+    // Current note already has "GUI"
+    let current_tags = vec!["GUI".to_string()];
+    let suggestions = get_suggested_tags(&store, &current_tags, "");
+
+    // Expected:
+    // Rust (count: 3)
+    // crypto (count: 2)
+    // Security (count: 1)
+    // Slint (count: 1)
+    // "GUI" must be excluded!
+    assert_eq!(suggestions.len(), 4);
+    assert_eq!(suggestions[0].name.to_lowercase(), "rust");
+    assert_eq!(suggestions[0].count, 3);
+    assert_eq!(suggestions[1].name.to_lowercase(), "crypto");
+    assert_eq!(suggestions[1].count, 2);
+    assert_eq!(suggestions[2].count, 1);
+    assert_eq!(suggestions[3].count, 1);
+    assert!(!suggestions.iter().any(|s| s.name.to_lowercase() == "gui"));
+}
+
+#[test]
+fn test_get_suggested_tags_case_insensitive_exclusion() {
+    let mut store = HashMap::new();
+    store.insert(
+        "note-1".to_string(),
+        NoteMetaSummary {
+            title: "Note 1".to_string(),
+            category: "General".to_string(),
+            tags: vec!["ProjectX".to_string(), "personal".to_string()],
+            date: "2026-01-01".to_string(),
+            updated_at: 100,
+            file_path: PathBuf::from("/vault/note-1.vault"),
+        },
+    );
+
+    // Current note has "projectx" in lower case, store has "ProjectX"
+    let current_tags = vec!["projectx".to_string()];
+    let suggestions = get_suggested_tags(&store, &current_tags, "");
+
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].name, "personal");
+    assert_eq!(suggestions[0].count, 1);
+}
+
+#[test]
+fn test_get_suggested_tags_query_filtering() {
+    let mut store = HashMap::new();
+    store.insert(
+        "note-1".to_string(),
+        NoteMetaSummary {
+            title: "Note 1".to_string(),
+            category: "General".to_string(),
+            tags: vec!["development".to_string(), "devops".to_string(), "finance".to_string()],
+            date: "2026-01-01".to_string(),
+            updated_at: 100,
+            file_path: PathBuf::from("/vault/note-1.vault"),
+        },
+    );
+
+    let current_tags = vec![];
+    let dev_matches = get_suggested_tags(&store, &current_tags, "dev");
+    assert_eq!(dev_matches.len(), 2);
+    assert!(dev_matches.iter().any(|s| s.name == "development"));
+    assert!(dev_matches.iter().any(|s| s.name == "devops"));
+
+    let ops_matches = get_suggested_tags(&store, &current_tags, "OPS");
+    assert_eq!(ops_matches.len(), 1);
+    assert_eq!(ops_matches[0].name, "devops");
+
+    let no_matches = get_suggested_tags(&store, &current_tags, "nonexistent");
+    assert!(no_matches.is_empty());
+}
+
+#[test]
+fn test_get_suggested_tags_deduplication_and_whitespace() {
+    let mut store = HashMap::new();
+    store.insert(
+        "note-1".to_string(),
+        NoteMetaSummary {
+            title: "Note 1".to_string(),
+            category: "General".to_string(),
+            // Contains duplicates within the same note and whitespace tags
+            tags: vec!["tag1 ".to_string(), " tag1".to_string(), "   ".to_string()],
+            date: "2026-01-01".to_string(),
+            updated_at: 100,
+            file_path: PathBuf::from("/vault/note-1.vault"),
+        },
+    );
+
+    let current_tags = vec![];
+    let suggestions = get_suggested_tags(&store, &current_tags, "");
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].name, "tag1");
+    assert_eq!(suggestions[0].count, 1);
+}
+

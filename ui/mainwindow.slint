@@ -10,6 +10,7 @@ import {
     RenameFolderModal, 
     MoveNoteModal, 
     AddTagModal,
+    TagSuggestion,
     WelcomeModal,
     ExportModal,
     WarningModal
@@ -18,7 +19,7 @@ import { SettingsDialog } from "settings.slint";
 import { QuickSearchWindow, QuickViewerWindow, QuickSearchResult } from "quick_search.slint";
 import { UnlockWindow } from "unlock_window.slint";
 
-export { Theme, Palette, QuickSearchWindow, QuickViewerWindow, QuickSearchResult, UnlockWindow }
+export { Theme, Palette, QuickSearchWindow, QuickViewerWindow, QuickSearchResult, UnlockWindow, TagSuggestion }
 
 export struct NoteMetadata {
     id: string,
@@ -110,6 +111,8 @@ export component MainWindow inherits Window {
     // --- Add Tag Modal State ---
     in-out property <bool> show_add_tag_modal: false;
     in-out property <string> new_tag_name: "";
+    in-out property <[TagSuggestion]> suggested_tags: [];
+    in-out property <int> add_tag_selected_index: -1;
 
     // --- Active Note Metadata & Editor Content ---
     in-out property <string> active_note_id: "";
@@ -181,6 +184,8 @@ export component MainWindow inherits Window {
     callback move_note_confirmed(string, string); // note_id, target_folder
     callback delete_note_confirmed(string); // note_id
     callback remove_tag_requested(int); // tag index
+    callback open_add_tag_requested();
+    callback tag_search_changed(string);
     callback add_tag_confirmed(string); // new tag
     callback search_changed(string);
 
@@ -1216,8 +1221,7 @@ export component MainWindow inherits Window {
                                     add_tag_touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
-                                            root.new_tag_name = "";
-                                            root.show_add_tag_modal = true;
+                                            root.open_add_tag_requested();
                                         }
                                     }
 
@@ -1926,7 +1930,10 @@ export component MainWindow inherits Window {
 
     if root.show_add_tag_modal : AddTagModal {
         tag_name <=> root.new_tag_name;
+        suggested_tags: root.suggested_tags;
+        selected_index <=> root.add_tag_selected_index;
         cancel => { root.show_add_tag_modal = false; }
+        tag_input_changed(query) => { root.tag_search_changed(query); }
         add(name) => {
             root.show_add_tag_modal = false;
             root.has_unsaved_changes = true;
