@@ -157,6 +157,9 @@ pub struct AppConfig {
 
     #[serde(default = "default_editor_font_size")]
     pub editor_font_size: u32,
+
+    #[serde(default)]
+    pub launch_at_startup: bool,
 }
 
 impl Default for AppConfig {
@@ -172,6 +175,7 @@ impl Default for AppConfig {
             editor_line_wrap: default_editor_line_wrap(),
             editor_highlight_current_line: default_editor_highlight_current_line(),
             editor_font_size: default_editor_font_size(),
+            launch_at_startup: false,
         }
     }
 }
@@ -245,6 +249,7 @@ mod tests {
         assert!(config.editor_line_wrap);
         assert!(config.editor_highlight_current_line);
         assert_eq!(config.editor_font_size, 14);
+        assert!(!config.launch_at_startup);
     }
 
     #[test]
@@ -263,6 +268,7 @@ mod tests {
             editor_line_wrap: false,
             editor_highlight_current_line: false,
             editor_font_size: 18,
+            launch_at_startup: true,
         };
 
         config.save_to_path(&config_path).expect("Saving config should succeed");
@@ -293,6 +299,7 @@ mod tests {
         assert!(loaded.editor_line_wrap);
         assert!(loaded.editor_highlight_current_line);
         assert_eq!(loaded.editor_font_size, 14);
+        assert!(!loaded.launch_at_startup);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

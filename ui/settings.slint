@@ -19,6 +19,7 @@ export component SettingsDialog inherits Rectangle {
     in property <[string]> theme_options: ["dark", "blue", "light"];
     in-out property <string> global_hotkey: "Shift+Space";
     in-out property <bool> minimize_to_tray: true;
+    in-out property <bool> launch_at_startup: false;
     in-out property <bool> is_recording_hotkey: false;
     in property <bool> is_vault_locked: true;
 
@@ -42,7 +43,7 @@ export component SettingsDialog inherits Rectangle {
 
     // Callbacks
     callback browse_path_clicked();
-    callback save_settings(string, bool, string, string, bool);
+    callback save_settings(string, bool, string, string, bool, bool);
     callback change_password(string, string, string);
     callback browse_new_keyfile();
     callback update_keyfile(string, string, bool);
@@ -161,6 +162,11 @@ export component SettingsDialog inherits Rectangle {
                 CheckBox {
                     text: "Minimize to tray icon";
                     checked <=> root.minimize_to_tray;
+                }
+
+                CheckBox {
+                    text: "Launch at startup";
+                    checked <=> root.launch_at_startup;
                 }
 
                 HorizontalLayout {
@@ -606,7 +612,7 @@ export component SettingsDialog inherits Rectangle {
                     text: "Save Settings";
                     primary: true;
                     clicked => {
-                        root.save_settings(root.vault_path, root.use_multithreading, root.theme, root.global_hotkey, root.minimize_to_tray);
+                        root.save_settings(root.vault_path, root.use_multithreading, root.theme, root.global_hotkey, root.minimize_to_tray, root.launch_at_startup);
                     }
                 }
             }

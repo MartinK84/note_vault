@@ -37,6 +37,10 @@ struct Args {
     /// Path to the encrypted vault directory (optional, temporarily overrides config.json)
     #[arg(short, long, value_name = "PATH")]
     vault_path: Option<PathBuf>,
+
+    /// Launch the application minimized to system tray (used for system startup)
+    #[arg(long)]
+    minimized: bool,
 }
 
 /// Metadata extracted from a decrypted note, stored without plaintext content.
@@ -508,6 +512,48 @@ fn activate_quick_viewer_window() {
 #[cfg(not(target_os = "windows"))]
 fn activate_quick_viewer_window() {}
 
+/// Activates and brings the UnlockWindow to the foreground on Windows.
+#[cfg(target_os = "windows")]
+fn activate_unlock_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        fn SetForegroundWindow(hWnd: isize) -> i32;
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+    }
+    unsafe {
+        let title_wide: Vec<u16> = "NoteVault - Unlock Vault"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd != 0 {
+            ShowWindow(hwnd, 5); // SW_SHOW
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn activate_unlock_window() {}
+
+/// Sizes and centers the UnlockWindow on the primary display according to its content height.
+fn center_and_resize_unlock_window(uw: &UnlockWindow) {
+    let (screen_w, screen_h) = get_primary_screen_size();
+    let scale = uw.window().scale_factor();
+    let logical_w = if scale > 0.0 { screen_w / scale } else { screen_w };
+    let logical_h = if scale > 0.0 { screen_h / scale } else { screen_h };
+
+    let win_w = 460.0;
+    let req_h = uw.get_requested_height();
+    let win_h = if req_h > 50.0 { req_h } else { 180.0 };
+    let pos_x = (logical_w - win_w) / 2.0;
+    let pos_y = (logical_h - win_h) / 2.0;
+
+    uw.window().set_size(slint::LogicalSize::new(win_w, win_h));
+    uw.window().set_position(slint::LogicalPosition::new(pos_x, pos_y));
+}
+
 /// Formats a pressed key and active modifiers into a normalized hotkey string.
 /// Returns Some("Shift+Space"), Some("Control+Shift+N"), etc. if valid; None if incomplete or only modifiers.
 pub fn format_key_combination(
@@ -783,6 +829,7 @@ fn trigger_vault_reload(
     s_query: Arc<Mutex<String>>,
     use_multi: Arc<AtomicBool>,
     is_initial_unlock: bool,
+    on_complete: Option<Box<dyn FnOnce(bool) + Send + 'static>>,
 ) {
     let Some(ui) = window_weak.upgrade() else { return };
 
@@ -835,6 +882,9 @@ fn trigger_vault_reload(
                 }
             })
             .ok();
+            if let Some(cb) = on_complete {
+                cb(true);
+            }
             return;
         }
 
@@ -934,6 +984,9 @@ fn trigger_vault_reload(
                 }
             })
             .ok();
+            if let Some(cb) = on_complete {
+                cb(false);
+            }
             return;
         }
 
@@ -962,12 +1015,25 @@ fn trigger_vault_reload(
             ui.set_note_content("".into());
         })
         .ok();
+        if let Some(cb) = on_complete {
+            cb(true);
+        }
     });
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let config = AppConfig::load();
+
+    // Synchronize startup registration with the current executable path if enabled
+    if config.launch_at_startup {
+        let _ = note_vault::startup::set_launch_at_startup(true, config.minimize_to_tray);
+    }
+    let should_start_minimized = args.minimized && config.minimize_to_tray;
+    if should_start_minimized {
+        #[cfg(target_os = "windows")]
+        MAIN_WINDOW_HIDDEN_TO_TRAY.store(true, Ordering::Relaxed);
+    }
 
     // Determine vault path (CLI overrides config temporarily)
     let _is_cli_override = args.vault_path.is_some();
@@ -996,15 +1062,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("*All Notes*".to_string()));
     let search_query: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
-    // Slint Windows: Main, QuickSearch, QuickViewer
+    // Slint Windows: Main, QuickSearch, QuickViewer, UnlockWindow
     let main_window = MainWindow::new()?;
     main_window.window().set_size(slint::LogicalSize::new(1534.0, 740.0));
     let window_weak = main_window.as_weak();
 
     let quick_search = QuickSearchWindow::new()?;
     let quick_viewer = QuickViewerWindow::new()?;
+    let unlock_window = UnlockWindow::new()?;
     let quick_search_weak = quick_search.as_weak();
     let quick_viewer_weak = quick_viewer.as_weak();
+    let unlock_window_weak = unlock_window.as_weak();
+
+    let is_unlock_window_open = Arc::new(AtomicBool::new(false));
 
     // Initialize Theme
     let theme_name = match config.theme.as_str() {
@@ -1019,6 +1089,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     quick_search.global::<Theme>().set_is_dark(is_dark);
     quick_viewer.global::<Theme>().set_theme(theme_name.into());
     quick_viewer.global::<Theme>().set_is_dark(is_dark);
+    unlock_window.global::<Theme>().set_theme(theme_name.into());
+    unlock_window.global::<Theme>().set_is_dark(is_dark);
     main_window.set_settings_theme(theme_name.into());
 
     let theme_options_model: slint::ModelRc<slint::SharedString> =
@@ -1030,6 +1102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_settings_use_multithreading(config.use_multithreading);
     main_window.set_settings_global_hotkey(config.global_hotkey.as_str().into());
     main_window.set_settings_minimize_to_tray(config.minimize_to_tray);
+    main_window.set_settings_launch_at_startup(config.launch_at_startup);
 
     // Initialize Note Editor preferences
     main_window.set_editor_show_line_numbers(config.editor_show_line_numbers);
@@ -1193,11 +1266,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn background thread to listen for global hotkey events
     {
         let quick_search_weak = quick_search_weak.clone();
+        let unlock_window_weak = unlock_window_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let active_hotkey = Arc::clone(&active_hotkey);
-        let is_open = Arc::clone(&is_quick_search_open);
+        let is_qs_open = Arc::clone(&is_quick_search_open);
+        let is_uw_open = Arc::clone(&is_unlock_window_open);
         let shown_at = Arc::clone(&quick_search_shown_at);
         let session_password = Arc::clone(&session_password);
+        let app_config = Arc::clone(&app_config);
 
         thread::spawn(move || {
             let receiver = GlobalHotKeyEvent::receiver();
@@ -1205,50 +1281,89 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if event.state == HotKeyState::Pressed {
                     let current_hk_id = active_hotkey.lock().unwrap().map(|hk| hk.id());
                     if current_hk_id == Some(event.id) {
-                        // Quick search is disabled when vault is locked
-                        if session_password.lock().unwrap().is_none() {
-                            continue;
+                        let is_locked = session_password.lock().unwrap().is_none();
+                        if is_locked {
+                            let uw_weak = unlock_window_weak.clone();
+                            let is_open = Arc::clone(&is_uw_open);
+                            let cfg_arc = Arc::clone(&app_config);
+
+                            slint::invoke_from_event_loop(move || {
+                                if let Some(uw) = uw_weak.upgrade() {
+                                    if is_open.load(Ordering::SeqCst) {
+                                        is_open.store(false, Ordering::SeqCst);
+                                        uw.invoke_clear_fields();
+                                        let _ = uw.hide();
+                                    } else {
+                                        uw.invoke_clear_fields();
+                                        let cfg = cfg_arc.lock().unwrap();
+                                        if let Some(kpath) = cfg.resolved_keyfile_path() {
+                                            if !kpath.exists() {
+                                                uw.set_error_message(
+                                                    format!("Keyfile missing at {}. Please locate it.", kpath.display()).into(),
+                                                );
+                                                uw.set_show_keyfile_browse(true);
+                                            } else {
+                                                uw.set_show_keyfile_browse(false);
+                                            }
+                                        } else {
+                                            uw.set_show_keyfile_browse(false);
+                                        }
+
+                                        center_and_resize_unlock_window(&uw);
+                                        is_open.store(true, Ordering::SeqCst);
+                                        let _ = uw.show();
+                                        uw.invoke_focus_password();
+                                        activate_unlock_window();
+                                    }
+                                }
+                            })
+                            .ok();
+                        } else {
+                            let weak = quick_search_weak.clone();
+                            let m_store = Arc::clone(&metadata_store);
+                            let is_open = Arc::clone(&is_qs_open);
+                            let shown_at = Arc::clone(&shown_at);
+
+                            slint::invoke_from_event_loop(move || {
+                                if let Some(qs) = weak.upgrade() {
+                                    if is_open.load(Ordering::SeqCst) {
+                                        is_open.store(false, Ordering::SeqCst);
+                                        let _ = qs.hide();
+                                    } else {
+                                        qs.set_search_text("".into());
+                                        let initial_results = {
+                                            let store = m_store.lock().unwrap();
+                                            filter_quick_search_results("", &store)
+                                        };
+                                        let model = std::rc::Rc::new(slint::VecModel::from(initial_results));
+                                        qs.set_results(model.into());
+                                        qs.set_selected_index(0);
+
+                                        // Position in the center of the primary screen
+                                        let (screen_w, screen_h) = get_primary_screen_size();
+                                        let scale = qs.window().scale_factor();
+                                        let logical_w = if scale > 0.0 { screen_w / scale } else { screen_w };
+                                        let logical_h = if scale > 0.0 { screen_h / scale } else { screen_h };
+
+                                        let win_w = 650.0;
+                                        let win_h = 360.0;
+                                        let pos_x = (logical_w - win_w) / 2.0;
+                                        let pos_y = (logical_h - win_h) / 2.0;
+
+                                        qs.window().set_size(slint::LogicalSize::new(win_w, win_h));
+                                        qs.window().set_position(slint::LogicalPosition::new(pos_x, pos_y));
+
+                                        is_open.store(true, Ordering::SeqCst);
+                                        *shown_at.lock().unwrap() = std::time::Instant::now();
+
+                                        let _ = qs.show();
+                                        qs.invoke_focus_search();
+                                        activate_quick_search_window();
+                                    }
+                                }
+                            })
+                            .ok();
                         }
-
-                        let weak = quick_search_weak.clone();
-                        let m_store = Arc::clone(&metadata_store);
-                        let is_open = Arc::clone(&is_open);
-                        let shown_at = Arc::clone(&shown_at);
-
-                        slint::invoke_from_event_loop(move || {
-                            if let Some(qs) = weak.upgrade() {
-                                qs.set_search_text("".into());
-                                let initial_results = {
-                                    let store = m_store.lock().unwrap();
-                                    filter_quick_search_results("", &store)
-                                };
-                                let model = std::rc::Rc::new(slint::VecModel::from(initial_results));
-                                qs.set_results(model.into());
-                                qs.set_selected_index(0);
-
-                                // Position in the center of the primary screen
-                                let (screen_w, screen_h) = get_primary_screen_size();
-                                let scale = qs.window().scale_factor();
-                                let logical_w = if scale > 0.0 { screen_w / scale } else { screen_w };
-                                let logical_h = if scale > 0.0 { screen_h / scale } else { screen_h };
-
-                                let win_w = 650.0;
-                                let win_h = 360.0;
-                                let pos_x = (logical_w - win_w) / 2.0;
-                                let pos_y = (logical_h - win_h) / 2.0;
-
-                                qs.window().set_size(slint::LogicalSize::new(win_w, win_h));
-                                qs.window().set_position(slint::LogicalPosition::new(pos_x, pos_y));
-
-                                is_open.store(true, Ordering::SeqCst);
-                                *shown_at.lock().unwrap() = std::time::Instant::now();
-
-                                let _ = qs.show();
-                                qs.invoke_focus_search();
-                                activate_quick_search_window();
-                            }
-                        })
-                        .ok();
                     }
                 }
             }
@@ -1438,6 +1553,205 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = qv.hide();
             }
             slint::CloseRequestResponse::HideWindow
+        }
+    });
+
+    quick_search.window().on_close_requested({
+        let quick_search_weak = quick_search_weak.clone();
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
+        move || {
+            is_quick_search_open.store(false, Ordering::SeqCst);
+            if let Some(qs) = quick_search_weak.upgrade() {
+                let _ = qs.hide();
+            }
+            slint::CloseRequestResponse::HideWindow
+        }
+    });
+
+    // -------------------------------------------------------------
+    // UnlockWindow Callbacks (for standalone quick search unlocking)
+    // -------------------------------------------------------------
+    unlock_window.on_close_requested({
+        let unlock_window_weak = unlock_window_weak.clone();
+        let is_unlock_window_open = Arc::clone(&is_unlock_window_open);
+        move || {
+            is_unlock_window_open.store(false, Ordering::SeqCst);
+            if let Some(uw) = unlock_window_weak.upgrade() {
+                uw.invoke_clear_fields();
+                let _ = uw.hide();
+            }
+        }
+    });
+
+    unlock_window.window().on_close_requested({
+        let unlock_window_weak = unlock_window_weak.clone();
+        let is_unlock_window_open = Arc::clone(&is_unlock_window_open);
+        move || {
+            is_unlock_window_open.store(false, Ordering::SeqCst);
+            if let Some(uw) = unlock_window_weak.upgrade() {
+                uw.invoke_clear_fields();
+                let _ = uw.hide();
+            }
+            slint::CloseRequestResponse::HideWindow
+        }
+    });
+
+    unlock_window.on_browse_keyfile_requested({
+        let unlock_window_weak = unlock_window_weak.clone();
+        let window_weak = window_weak.clone();
+        let app_config = Arc::clone(&app_config);
+        move || {
+            let picked_file = rfd::FileDialog::new()
+                .set_title("Locate Keyfile")
+                .pick_file();
+            if let Some(path) = picked_file {
+                let path_str = path.to_string_lossy().to_string();
+                let mut cfg = app_config.lock().unwrap();
+                cfg.keyfile_path = Some(path_str.clone());
+                let _ = cfg.save();
+                if let Some(uw) = unlock_window_weak.upgrade() {
+                    uw.set_error_message("".into());
+                    uw.set_show_keyfile_browse(false);
+                    center_and_resize_unlock_window(&uw);
+                }
+                if let Some(ui) = window_weak.upgrade() {
+                    ui.set_unlock_error_message("".into());
+                    ui.set_show_keyfile_browse(false);
+                    ui.set_vault_status_text(format!("Keyfile located: {}", path_str).into());
+                }
+            }
+        }
+    });
+
+    unlock_window.on_unlock_requested({
+        let unlock_window_weak = unlock_window_weak.clone();
+        let quick_search_weak = quick_search_weak.clone();
+        let window_weak = window_weak.clone();
+        let vault_path = Arc::clone(&vault_path);
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+        let active_folder = Arc::clone(&active_folder);
+        let search_query = Arc::clone(&search_query);
+        let use_multithreading = Arc::clone(&use_multithreading);
+        let app_config = Arc::clone(&app_config);
+        let is_unlock_window_open = Arc::clone(&is_unlock_window_open);
+        let is_quick_search_open = Arc::clone(&is_quick_search_open);
+        let quick_search_shown_at = Arc::clone(&quick_search_shown_at);
+
+        move |raw_password| {
+            let Some(uw) = unlock_window_weak.upgrade() else { return };
+            let password = Zeroizing::new(raw_password.to_string());
+
+            if password.is_empty() {
+                uw.set_error_message("Please enter a master password.".into());
+                center_and_resize_unlock_window(&uw);
+                return;
+            }
+
+            let keyfile_data = {
+                let cfg = app_config.lock().unwrap();
+                if let Some(kpath) = cfg.resolved_keyfile_path() {
+                    if !kpath.exists() {
+                        uw.set_error_message(
+                            format!("Keyfile missing at {}. Please locate it.", kpath.display()).into(),
+                        );
+                        uw.set_show_keyfile_browse(true);
+                        center_and_resize_unlock_window(&uw);
+                        return;
+                    }
+                    match std::fs::read(&kpath) {
+                        Ok(data) => Some(Zeroizing::new(data)),
+                        Err(e) => {
+                            uw.set_error_message(
+                                format!("Failed to read keyfile: {}", e).into(),
+                            );
+                            uw.set_show_keyfile_browse(true);
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                }
+            };
+
+            uw.set_is_loading(true);
+            uw.set_error_message("".into());
+
+            let uw_weak = unlock_window_weak.clone();
+            let qs_weak = quick_search_weak.clone();
+            let m_store = Arc::clone(&metadata_store);
+            let is_uw_open = Arc::clone(&is_unlock_window_open);
+            let is_qs_open = Arc::clone(&is_quick_search_open);
+            let qs_shown = Arc::clone(&quick_search_shown_at);
+
+            trigger_vault_reload(
+                password,
+                keyfile_data,
+                window_weak.clone(),
+                Arc::clone(&vault_path),
+                Arc::clone(&metadata_store),
+                Arc::clone(&session_password),
+                Arc::clone(&session_keyfile),
+                Arc::clone(&active_folder),
+                Arc::clone(&search_query),
+                Arc::clone(&use_multithreading),
+                true,
+                Some(Box::new(move |success| {
+                    slint::invoke_from_event_loop(move || {
+                        if success {
+                            // Hide UnlockWindow
+                            if let Some(uw) = uw_weak.upgrade() {
+                                uw.invoke_clear_fields();
+                                let _ = uw.hide();
+                                is_uw_open.store(false, Ordering::SeqCst);
+                            }
+
+                            // Show QuickSearchWindow
+                            if let Some(qs) = qs_weak.upgrade() {
+                                qs.set_search_text("".into());
+                                let initial_results = {
+                                    let store = m_store.lock().unwrap();
+                                    filter_quick_search_results("", &store)
+                                };
+                                let model = std::rc::Rc::new(slint::VecModel::from(initial_results));
+                                qs.set_results(model.into());
+                                qs.set_selected_index(0);
+
+                                let (screen_w, screen_h) = get_primary_screen_size();
+                                let scale = qs.window().scale_factor();
+                                let logical_w = if scale > 0.0 { screen_w / scale } else { screen_w };
+                                let logical_h = if scale > 0.0 { screen_h / scale } else { screen_h };
+
+                                let win_w = 650.0;
+                                let win_h = 360.0;
+                                let pos_x = (logical_w - win_w) / 2.0;
+                                let pos_y = (logical_h - win_h) / 2.0;
+
+                                qs.window().set_size(slint::LogicalSize::new(win_w, win_h));
+                                qs.window().set_position(slint::LogicalPosition::new(pos_x, pos_y));
+
+                                is_qs_open.store(true, Ordering::SeqCst);
+                                *qs_shown.lock().unwrap() = std::time::Instant::now();
+
+                                let _ = qs.show();
+                                qs.invoke_focus_search();
+                                activate_quick_search_window();
+                            }
+                        } else {
+                            if let Some(uw) = uw_weak.upgrade() {
+                                uw.set_is_loading(false);
+                                uw.set_error_message(
+                                    "Decryption failed: invalid master password, keyfile mismatch, or corrupted note file.".into(),
+                                );
+                                center_and_resize_unlock_window(&uw);
+                                uw.invoke_focus_password();
+                            }
+                        }
+                    })
+                    .ok();
+                })),
+            );
         }
     });
 
@@ -1752,6 +2066,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_settings_theme(cur_theme.into());
             ui.set_settings_global_hotkey(cur_hotkey.into());
             ui.set_settings_minimize_to_tray(cur_minimize);
+            ui.set_settings_launch_at_startup(cfg.launch_at_startup);
             ui.set_settings_cur_pwd("".into());
             ui.set_settings_new_pwd("".into());
             ui.set_settings_confirm_pwd("".into());
@@ -1776,6 +2091,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         let quick_search_weak = quick_search_weak.clone();
         let quick_viewer_weak = quick_viewer_weak.clone();
+        let unlock_window_weak = unlock_window_weak.clone();
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
         let vault_path = Arc::clone(&vault_path);
         let use_multithreading = Arc::clone(&use_multithreading);
@@ -1788,7 +2104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
-        move |new_path_str, new_multi, new_theme_str, new_hotkey_str, new_min_tray| {
+        move |new_path_str, new_multi, new_theme_str, new_hotkey_str, new_min_tray, new_launch_startup| {
             let Some(ui) = window_weak.upgrade() else { return };
             let new_path_clean = new_path_str.trim().to_string();
             let new_theme_clean = new_theme_str.trim().to_string();
@@ -1804,9 +2120,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // 1. Update and save config.json
-            let old_hotkey = {
+            let (old_hotkey, old_launch, old_min_tray) = {
                 let mut cfg = app_config.lock().unwrap();
                 let old_hk = cfg.global_hotkey.clone();
+                let old_launch = cfg.launch_at_startup;
+                let old_min_tray = cfg.minimize_to_tray;
                 cfg.vault_path = new_path_clean.clone();
                 cfg.use_multithreading = new_multi;
                 let final_theme = match new_theme_clean.as_str() {
@@ -1817,13 +2135,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cfg.theme = final_theme.to_string();
                 cfg.global_hotkey = clean_hotkey_str.clone();
                 cfg.minimize_to_tray = new_min_tray;
+                cfg.launch_at_startup = new_launch_startup;
                 if let Err(e) = cfg.save() {
                     eprintln!("Failed to save config.json: {}", e);
                 }
-                old_hk
+                (old_hk, old_launch, old_min_tray)
             };
 
-            // 1b. If hotkey changed, update global registration
+            // 1b. If startup registration or minimize_to_tray changed, update startup registration
+            if old_launch != new_launch_startup || (new_launch_startup && old_min_tray != new_min_tray) {
+                if let Err(e) = note_vault::startup::set_launch_at_startup(new_launch_startup, new_min_tray) {
+                    eprintln!("Failed to update startup registration: {}", e);
+                }
+            }
+
+            // 1c. If hotkey changed, update global registration
             if let Some(new_hk) = new_hk_opt {
                 if old_hotkey != clean_hotkey_str {
                     if let Some(ref mut mgr) = *hotkey_manager.lock().unwrap() {
@@ -1840,6 +2166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             ui.set_settings_global_hotkey(clean_hotkey_str.into());
             ui.set_settings_minimize_to_tray(new_min_tray);
+            ui.set_settings_launch_at_startup(new_launch_startup);
 
             // 2. Apply theme dynamically
             let final_theme = match new_theme_clean.as_str() {
@@ -1857,6 +2184,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(qv) = quick_viewer_weak.upgrade() {
                 qv.global::<Theme>().set_theme(final_theme.into());
                 qv.global::<Theme>().set_is_dark(is_dark_mode);
+            }
+            if let Some(uw) = unlock_window_weak.upgrade() {
+                uw.global::<Theme>().set_theme(final_theme.into());
+                uw.global::<Theme>().set_is_dark(is_dark_mode);
             }
 
             // 3. Update multithreading state
@@ -2386,6 +2717,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&search_query),
                 Arc::clone(&use_multithreading),
                 true,
+                None,
             );
         }
     });
@@ -2497,6 +2829,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Arc::clone(&search_query),
                             Arc::clone(&use_multithreading),
                             false,
+                            None,
                         );
                     }
                 }
@@ -2534,6 +2867,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arc::clone(&search_query),
                     Arc::clone(&use_multithreading),
                     false,
+                    None,
                 );
             }
         }
@@ -3433,7 +3767,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tray_timer = tray_timer;
 
     // Run Slint GUI event loop until explicit quit (persists when windows are hidden to system tray)
-    main_window.show()?;
+    if !should_start_minimized {
+        main_window.show()?;
+    }
     slint::run_event_loop_until_quit()?;
     Ok(())
 }

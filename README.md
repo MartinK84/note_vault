@@ -48,7 +48,8 @@ On first run the GUI reads `config.json` from the working directory. An example 
   "editor_show_line_numbers": true,
   "editor_line_wrap": true,
   "editor_highlight_current_line": true,
-  "editor_font_size": 14
+  "editor_font_size": 14,
+  "launch_at_startup": false
 }
 ```
 
@@ -64,6 +65,7 @@ On first run the GUI reads `config.json` from the working directory. An example 
 | `editor_line_wrap` | bool | Wrap long lines in the editor. |
 | `editor_highlight_current_line` | bool | Highlight the line the cursor is on. |
 | `editor_font_size` | integer | Editor font size in points. |
+| `launch_at_startup` | bool | Register NoteVault to launch automatically on system startup (minimized if `minimize_to_tray` is enabled). |
 
 The `--vault-path` command-line flag overrides `vault_path` from `config.json` for a single session.
 

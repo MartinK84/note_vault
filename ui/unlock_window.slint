@@ -1,0 +1,191 @@
+import { Button, LineEdit, Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component UnlockWindow inherits Window {
+    title: "NoteVault - Unlock Vault";
+    icon: @image-url("../assets/icons/logo.svg");
+    no-frame: true;
+    width: 460px;
+    preferred-width: 460px;
+    height: content_layout.preferred-height;
+    preferred-height: content_layout.preferred-height;
+    background: Colors.transparent;
+    default-font-family: "Segoe UI, Inter, sans-serif";
+
+    in-out property <string> password: "";
+    in-out property <string> error_message: "";
+    in-out property <bool> show_keyfile_browse: false;
+    in-out property <bool> is_loading: false;
+    out property <length> requested_height: content_layout.preferred-height;
+
+    callback unlock_requested(string);
+    callback browse_keyfile_requested();
+    callback close_requested();
+
+    public function focus_password() {
+        pwd_input.focus();
+    }
+
+    public function clear_fields() {
+        root.password = "";
+        root.error_message = "";
+        root.is_loading = false;
+    }
+
+    init => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+        pwd_input.focus();
+    }
+
+    property <bool> is_dark: Theme.is_dark;
+    changed is_dark => {
+        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
+    }
+
+    FocusScope {
+        width: 100%;
+        height: 100%;
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.clear_fields();
+                root.close_requested();
+                return accept;
+            }
+            reject
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.clear_fields();
+                root.close_requested();
+                return accept;
+            }
+            reject
+        }
+
+        Rectangle {
+            width: 100%;
+            height: content_layout.preferred-height;
+            background: Theme.bg_surface;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border_active;
+            clip: true;
+
+            content_layout := VerticalLayout {
+                padding-top: 16px;
+                padding-bottom: 16px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 12px;
+                alignment: start;
+
+                // Header with close button
+                HorizontalLayout {
+                    alignment: space-between;
+                    cross-axis-alignment: center;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        cross-axis-alignment: center;
+
+                        Image {
+                            source: @image-url("../assets/icons/lock.svg");
+                            width: 20px;
+                            height: 20px;
+                            colorize: Theme.accent;
+                        }
+
+                        Text {
+                            text: "Unlock Secure Vault";
+                            font-size: 18px;
+                            font-weight: 700;
+                            color: Theme.text_primary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 26px;
+                        height: 26px;
+                        border-radius: 6px;
+                        background: close_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                        close_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.clear_fields();
+                                root.close_requested();
+                            }
+                        }
+
+                        Image {
+                            source: @image-url("../assets/icons/x.svg");
+                            width: 12px;
+                            height: 12px;
+                            colorize: close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+
+                Text {
+                    text: "Enter your master passphrase to unlock and search notes.";
+                    font-size: 12px;
+                    color: Theme.text_secondary;
+                    horizontal-alignment: left;
+                    wrap: word-wrap;
+                }
+
+                pwd_input := LineEdit {
+                    text <=> root.password;
+                    input-type: InputType.password;
+                    placeholder-text: "Master Vault Password...";
+                    font-size: 13px;
+                    enabled: !root.is_loading;
+                    accepted => {
+                        if !root.is_loading {
+                            root.unlock_requested(root.password);
+                        }
+                    }
+                }
+
+                if root.error_message != "" : Text {
+                    text: root.error_message;
+                    font-size: 12px;
+                    color: Theme.danger;
+                    horizontal-alignment: left;
+                    wrap: word-wrap;
+                }
+
+                if root.show_keyfile_browse : HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    Button {
+                        text: "Browse Keyfile...";
+                        enabled: !root.is_loading;
+                        clicked => {
+                            root.browse_keyfile_requested();
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Button {
+                        text: root.is_loading ? "Unlocking..." : "Unlock Vault";
+                        primary: true;
+                        enabled: !root.is_loading;
+                        horizontal-stretch: 1;
+                        clicked => {
+                            root.unlock_requested(root.password);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

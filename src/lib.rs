@@ -21,9 +21,11 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub mod config;
 pub mod export;
+pub mod startup;
 pub mod validation;
 
 pub use export::*;
+pub use startup::*;
 pub use validation::*;
 
 /// Cryptographic binary file header constants.

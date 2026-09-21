@@ -132,3 +132,18 @@ fn test_create_tray_icon_succeeds() {
     let icon_res = create_tray_icon();
     assert!(icon_res.is_ok(), "Tray icon creation from logo.svg must succeed");
 }
+
+#[test]
+fn test_args_minimized_flag_parsing() {
+    let args1 = Args::parse_from(["note_vault_gui"]);
+    assert!(!args1.minimized);
+    assert_eq!(args1.vault_path, None);
+
+    let args2 = Args::parse_from(["note_vault_gui", "--minimized"]);
+    assert!(args2.minimized);
+
+    let args3 = Args::parse_from(["note_vault_gui", "--vault-path", "C:\\my_vault", "--minimized"]);
+    assert!(args3.minimized);
+    assert_eq!(args3.vault_path, Some(PathBuf::from("C:\\my_vault")));
+}
+
