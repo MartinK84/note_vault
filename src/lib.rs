@@ -22,6 +22,7 @@ use zeroize::{Zeroize, Zeroizing};
 pub mod config;
 pub mod export;
 pub mod markdown;
+pub mod single_instance;
 pub mod startup;
 pub mod validation;
 
@@ -29,6 +30,7 @@ slint::include_modules!();
 
 pub use export::*;
 pub use markdown::*;
+pub use single_instance::*;
 pub use startup::*;
 pub use validation::*;
 

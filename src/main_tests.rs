@@ -386,4 +386,54 @@ $$
     assert!(blocks.iter().any(|b| b.block_type == 7 && !b.is_task_checked));
 }
 
+#[test]
+fn test_args_autostart_and_working_dir_parsing() {
+    let args1 = Args::parse_from(["note_vault_gui", "--autostart"]);
+    assert!(args1.autostart);
+    assert!(!args1.minimized);
+    assert_eq!(args1.working_dir, None);
+
+    let args2 = Args::parse_from([
+        "note_vault_gui",
+        "--autostart",
+        "--minimized",
+        "--working-dir",
+        "C:\\custom_dir",
+    ]);
+    assert!(args2.autostart);
+    assert!(args2.minimized);
+    assert_eq!(args2.working_dir, Some(PathBuf::from("C:\\custom_dir")));
+}
+
+#[test]
+fn test_relative_vault_path_not_modified_on_config_resave() {
+    let temp_dir = std::env::temp_dir().join(format!("note_vault_test_rel_{}", uuid::Uuid::new_v4()));
+    let config_path = temp_dir.join("config.json");
+
+    let config = AppConfig {
+        vault_path: "vault".to_string(),
+        theme: "dark".to_string(),
+        ..AppConfig::default()
+    };
+    config.save_to_path(&config_path).expect("Initial save should succeed");
+
+    // Load from path
+    let mut loaded = AppConfig::load_from_path(&config_path);
+    assert_eq!(loaded.vault_path, "vault");
+
+    // Simulate resaving settings (changing theme, hotkey, etc.)
+    loaded.theme = "light".to_string();
+    loaded.use_multithreading = false;
+    loaded.save_to_path(&config_path).expect("Resave should succeed");
+
+    // Verify vault_path remains the relative path and was not expanded
+    let reloaded = AppConfig::load_from_path(&config_path);
+    assert_eq!(reloaded.vault_path, "vault");
+    assert_eq!(reloaded.theme, "light");
+    assert!(!reloaded.use_multithreading);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+
 

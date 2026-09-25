@@ -43,6 +43,14 @@ struct Args {
     /// Launch the application minimized to system tray (used for system startup)
     #[arg(long)]
     minimized: bool,
+
+    /// Launch initiated by system auto-start
+    #[arg(long)]
+    autostart: bool,
+
+    /// Set explicit working directory
+    #[arg(short = 'w', long, value_name = "DIR")]
+    working_dir: Option<PathBuf>,
 }
 
 /// Metadata extracted from a decrypted note, stored without plaintext content.
@@ -549,6 +557,102 @@ fn restore_main_window() {
 
 #[cfg(not(target_os = "windows"))]
 fn restore_main_window() {}
+
+/// Restores and focuses the window of an already running instance of NoteVault on Windows.
+#[cfg(target_os = "windows")]
+fn restore_other_instance_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        fn EnumWindows(lpEnumFunc: unsafe extern "system" fn(isize, isize) -> i32, lParam: isize) -> i32;
+        fn GetWindowTextW(hWnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
+        fn SetForegroundWindow(hWnd: isize) -> i32;
+        fn BringWindowToTop(hWnd: isize) -> i32;
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+        fn GetWindowLongPtrW(hWnd: isize, nIndex: i32) -> isize;
+        fn SetWindowLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+    }
+
+    unsafe extern "system" fn enum_proc(wnd: isize, lparam: isize) -> i32 {
+        unsafe {
+            let mut title_buf = [0u16; 256];
+            let len = GetWindowTextW(wnd, title_buf.as_mut_ptr(), 256);
+            if len > 0 {
+                let title = String::from_utf16_lossy(&title_buf[..len as usize]);
+                if title.contains("NoteVault - Secure Encrypted Notes") {
+                    *(lparam as *mut isize) = wnd;
+                    return 0;
+                }
+            }
+            1
+        }
+    }
+
+    unsafe {
+        let title_wide: Vec<u16> = "NoteVault - Secure Encrypted Notes"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd == 0 {
+            let mut found_hwnd: isize = 0;
+            EnumWindows(enum_proc, &mut found_hwnd as *mut isize as isize);
+            hwnd = found_hwnd;
+        }
+        if hwnd != 0 {
+            const GWL_EXSTYLE: i32 = -20;
+            const WS_EX_TOOLWINDOW: isize = 0x00000080;
+            const WS_EX_APPWINDOW: isize = 0x00040000;
+            let cur = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (cur & !WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW);
+            ShowWindow(hwnd, 9); // SW_RESTORE
+            taskbar_add_tab(hwnd);
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn restore_other_instance_window() {}
+
+/// Ensures that the working directory is properly set to the application directory
+/// when launched via autostart or from a system directory (such as C:\Windows\System32).
+fn setup_working_directory(args: &Args) {
+    if let Some(ref custom_dir) = args.working_dir {
+        let _ = std::env::set_current_dir(custom_dir);
+        return;
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let should_switch = if args.minimized || args.autostart {
+                true
+            } else if let Ok(cwd) = std::env::current_dir() {
+                #[cfg(target_os = "windows")]
+                let is_system_dir = {
+                    let cwd_str = cwd.to_string_lossy().to_lowercase();
+                    cwd_str.ends_with("\\system32")
+                        || cwd_str.ends_with("\\syswow64")
+                        || cwd_str == "c:\\windows"
+                        || cwd_str.starts_with("c:\\windows\\")
+                };
+                #[cfg(not(target_os = "windows"))]
+                let is_system_dir = false;
+
+                is_system_dir
+                    || (!cwd.join(AppConfig::CONFIG_FILE).exists()
+                        && exe_dir.join(AppConfig::CONFIG_FILE).exists())
+            } else {
+                false
+            };
+
+            if should_switch {
+                let _ = std::env::set_current_dir(exe_dir);
+            }
+        }
+    }
+}
 
 /// Activates and brings the QuickViewerWindow to the foreground on Windows.
 #[cfg(target_os = "windows")]
@@ -1094,6 +1198,25 @@ fn trigger_vault_reload(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    // 0. Limit to single instance running on this computer
+    let single_instance = match note_vault::single_instance::SingleInstance::new("NoteVault_App_SingleInstance") {
+        Ok(si) => si,
+        Err(e) => {
+            eprintln!("[SingleInstance] Warning: Failed to check single instance: {}", e);
+            return Err(e);
+        }
+    };
+
+    if !single_instance.is_single() {
+        eprintln!("Another instance of NoteVault is already running. Activating existing instance and exiting.");
+        restore_other_instance_window();
+        return Ok(());
+    }
+
+    // 1. Ensure working directory is properly set, especially for autostart
+    setup_working_directory(&args);
+
     let config = AppConfig::load();
 
     // Synchronize startup registration with the current executable path if enabled
@@ -1120,7 +1243,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         config.resolved_vault_path()
     };
-    let initial_vault_path_display = initial_vault_path.to_string_lossy().to_string();
+    let initial_vault_path_display = initial_vault_path_str.clone();
+
+    // Keep single instance lock active for entire process lifetime
+    let _single_instance_guard = single_instance;
 
     // Shared state
     let app_config = Arc::new(Mutex::new(config.clone()));
@@ -2116,14 +2242,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_open_settings_requested({
         let window_weak = window_weak.clone();
-        let vault_path = Arc::clone(&vault_path);
         let use_multithreading = Arc::clone(&use_multithreading);
         let app_config = Arc::clone(&app_config);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
             let cfg = app_config.lock().unwrap();
-            let cur_path = vault_path.lock().unwrap().to_string_lossy().to_string();
+            let cur_path = cfg.vault_path.clone();
             let cur_multi = use_multithreading.load(Ordering::Relaxed);
             let cur_hotkey = cfg.global_hotkey.clone();
             let cur_minimize = cfg.minimize_to_tray;
@@ -2271,11 +2396,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 4. Handle vault path changes
             let old_path = vault_path.lock().unwrap().clone();
-            let new_path = PathBuf::from(&new_path_clean);
+            let resolved_new_path = note_vault::config::expand_path(&new_path_clean);
 
-            if !new_path_clean.is_empty() && new_path != old_path {
-                let _ = std::fs::create_dir_all(&new_path);
-                *vault_path.lock().unwrap() = new_path.clone();
+            if !new_path_clean.is_empty() && resolved_new_path != old_path {
+                let _ = std::fs::create_dir_all(&resolved_new_path);
+                *vault_path.lock().unwrap() = resolved_new_path;
 
                 // Lock vault on folder switch
                 *session_password.lock().unwrap() = None;

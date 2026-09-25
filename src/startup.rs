@@ -295,6 +295,11 @@ mod linux {
             } else {
                 format!("\"{}\"", exe.display())
             };
+            let path_entry = if let Some(parent) = exe.parent() {
+                format!("Path={}\n", parent.display())
+            } else {
+                String::new()
+            };
             let content = format!(
                 "[Desktop Entry]\n\
                  Type=Application\n\
@@ -302,9 +307,10 @@ mod linux {
                  Name=NoteVault\n\
                  Comment=Secure Encrypted Notes\n\
                  Exec={}\n\
-                 Terminal=false\n\
+                 {}Terminal=false\n\
                  StartupNotify=false\n",
-                exec_cmd
+                exec_cmd,
+                path_entry
             );
             fs::write(&path, content)?;
         } else if path.exists() {
