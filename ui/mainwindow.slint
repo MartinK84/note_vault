@@ -158,6 +158,7 @@ export component MainWindow inherits Window {
     in-out property <string> settings_theme: "dark";
     in property <[string]> theme_options: ["dark", "blue", "light"];
     in-out property <string> settings_global_hotkey: "Shift+Space";
+    in-out property <string> settings_main_window_hotkey: "Control+Shift+Space";
     in-out property <bool> settings_minimize_to_tray: true;
     in-out property <bool> settings_launch_at_startup: false;
     in-out property <string> settings_cur_pwd: "";
@@ -212,7 +213,7 @@ export component MainWindow inherits Window {
 
     // Settings & File callbacks
     callback open_settings_requested();
-    callback save_settings_requested(string, bool, string, string, bool, bool); // path, multithreading, theme, hotkey, minimize_to_tray, launch_at_startup
+    callback save_settings_requested(string, bool, string, string, string, bool, bool); // path, multithreading, theme, quick_search_hotkey, main_window_hotkey, minimize_to_tray, launch_at_startup
     callback browse_vault_path_requested();
     callback change_password_requested(string, string, string); // current, new, confirm
     callback unlock_browse_keyfile_requested();
@@ -2572,6 +2573,7 @@ export component MainWindow inherits Window {
         theme <=> root.settings_theme;
         theme_options: root.theme_options;
         global_hotkey <=> root.settings_global_hotkey;
+        main_window_hotkey <=> root.settings_main_window_hotkey;
         minimize_to_tray <=> root.settings_minimize_to_tray;
         launch_at_startup <=> root.settings_launch_at_startup;
         current_password <=> root.settings_cur_pwd;
@@ -2592,8 +2594,8 @@ export component MainWindow inherits Window {
         browse_path_clicked => {
             root.browse_vault_path_requested();
         }
-        save_settings(path, multithreading, theme, hotkey, min_tray, launch_startup) => {
-            root.save_settings_requested(path, multithreading, theme, hotkey, min_tray, launch_startup);
+        save_settings(path, multithreading, theme, hotkey, main_hotkey, min_tray, launch_startup) => {
+            root.save_settings_requested(path, multithreading, theme, hotkey, main_hotkey, min_tray, launch_startup);
         }
         change_password(cur, new_pwd, confirm) => {
             root.change_password_requested(cur, new_pwd, confirm);

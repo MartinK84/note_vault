@@ -105,6 +105,10 @@ fn default_global_hotkey() -> String {
     "Shift+Space".to_string()
 }
 
+fn default_main_window_hotkey() -> String {
+    "Control+Shift+Space".to_string()
+}
+
 fn default_minimize_to_tray() -> bool {
     true
 }
@@ -155,6 +159,9 @@ pub struct AppConfig {
     #[serde(default = "default_global_hotkey")]
     pub global_hotkey: String,
 
+    #[serde(default = "default_main_window_hotkey")]
+    pub main_window_hotkey: String,
+
     #[serde(default = "default_minimize_to_tray")]
     pub minimize_to_tray: bool,
 
@@ -191,6 +198,7 @@ impl Default for AppConfig {
             use_multithreading: true,
             theme: default_theme(),
             global_hotkey: default_global_hotkey(),
+            main_window_hotkey: default_main_window_hotkey(),
             minimize_to_tray: default_minimize_to_tray(),
             editor_show_line_numbers: default_editor_show_line_numbers(),
             editor_line_wrap: default_editor_line_wrap(),
@@ -268,6 +276,7 @@ mod tests {
         assert!(config.use_multithreading);
         assert_eq!(config.theme, "dark");
         assert_eq!(config.global_hotkey, "Shift+Space");
+        assert_eq!(config.main_window_hotkey, "Control+Shift+Space");
         assert!(config.minimize_to_tray);
         assert!(!config.editor_show_line_numbers);
         assert!(config.editor_line_wrap);
@@ -290,6 +299,7 @@ mod tests {
             use_multithreading: false,
             theme: "light".to_string(),
             global_hotkey: "Control+Shift+N".to_string(),
+            main_window_hotkey: "Control+Shift+O".to_string(),
             minimize_to_tray: false,
             editor_show_line_numbers: true,
             editor_line_wrap: false,
@@ -324,6 +334,7 @@ mod tests {
         assert!(loaded.use_multithreading);
         assert_eq!(loaded.theme, "dark");
         assert_eq!(loaded.global_hotkey, "Shift+Space");
+        assert_eq!(loaded.main_window_hotkey, "Control+Shift+Space");
         assert!(loaded.minimize_to_tray);
         assert!(!loaded.editor_show_line_numbers);
         assert!(loaded.editor_line_wrap);

@@ -1298,6 +1298,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_settings_vault_path(initial_vault_path_display.as_str().into());
     main_window.set_settings_use_multithreading(config.use_multithreading);
     main_window.set_settings_global_hotkey(config.global_hotkey.as_str().into());
+    main_window.set_settings_main_window_hotkey(config.main_window_hotkey.as_str().into());
     main_window.set_settings_minimize_to_tray(config.minimize_to_tray);
     main_window.set_settings_launch_at_startup(config.launch_at_startup);
 
@@ -1447,21 +1448,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // Initialize Global Hotkey
+    // Initialize Global Hotkeys
     let initial_hotkey = parse_hotkey_string(&config.global_hotkey)
         .or_else(|_| parse_hotkey_string("Shift+Space"))
         .ok()
         .map(|(hk, _)| hk);
 
+    let initial_main_hotkey = parse_hotkey_string(&config.main_window_hotkey)
+        .or_else(|_| parse_hotkey_string("Control+Shift+Space"))
+        .ok()
+        .map(|(hk, _)| hk);
+
     let hotkey_manager = Arc::new(Mutex::new(GlobalHotKeyManager::new().ok()));
     let active_hotkey = Arc::new(Mutex::new(initial_hotkey));
+    let active_main_hotkey = Arc::new(Mutex::new(initial_main_hotkey));
 
-    if let (Some(ref mut mgr), Some(ref hk)) = (
-        hotkey_manager.lock().unwrap().as_mut(),
-        active_hotkey.lock().unwrap().as_ref(),
-    ) {
-        if let Err(e) = mgr.register(**hk) {
-            eprintln!("Failed to register initial global hotkey: {}", e);
+    if let Some(ref mut mgr) = *hotkey_manager.lock().unwrap() {
+        if let Some(ref hk) = *active_hotkey.lock().unwrap() {
+            if let Err(e) = mgr.register(*hk) {
+                eprintln!("Failed to register initial global hotkey: {}", e);
+            }
+        }
+        if let Some(ref hk) = *active_main_hotkey.lock().unwrap() {
+            if let Err(e) = mgr.register(*hk) {
+                eprintln!("Failed to register initial main window hotkey: {}", e);
+            }
         }
     }
 
@@ -1469,8 +1480,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let quick_search_weak = quick_search_weak.clone();
         let unlock_window_weak = unlock_window_weak.clone();
+        let window_weak = window_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let active_hotkey = Arc::clone(&active_hotkey);
+        let active_main_hotkey = Arc::clone(&active_main_hotkey);
         let is_qs_open = Arc::clone(&is_quick_search_open);
         let is_uw_open = Arc::clone(&is_unlock_window_open);
         let shown_at = Arc::clone(&quick_search_shown_at);
@@ -1481,8 +1494,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let receiver = GlobalHotKeyEvent::receiver();
             while let Ok(event) = receiver.recv() {
                 if event.state == HotKeyState::Pressed {
-                    let current_hk_id = active_hotkey.lock().unwrap().map(|hk| hk.id());
-                    if current_hk_id == Some(event.id) {
+                    let qs_hk_id = active_hotkey.lock().unwrap().map(|hk| hk.id());
+                    let main_hk_id = active_main_hotkey.lock().unwrap().map(|hk| hk.id());
+
+                    if main_hk_id == Some(event.id) {
+                        let weak = window_weak.clone();
+                        slint::invoke_from_event_loop(move || {
+                            if let Some(ui) = weak.upgrade() {
+                                let _ = ui.show();
+                                #[cfg(target_os = "windows")]
+                                MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
+                                restore_main_window();
+                            }
+                        })
+                        .ok();
+                    } else if qs_hk_id == Some(event.id) {
                         let is_locked = session_password.lock().unwrap().is_none();
                         if is_locked {
                             let uw_weak = unlock_window_weak.clone();
@@ -2266,6 +2292,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.global::<Theme>().set_is_dark(is_dark);
             ui.set_settings_theme(cur_theme.into());
             ui.set_settings_global_hotkey(cur_hotkey.into());
+            ui.set_settings_main_window_hotkey(cfg.main_window_hotkey.clone().into());
             ui.set_settings_minimize_to_tray(cur_minimize);
             ui.set_settings_launch_at_startup(cfg.launch_at_startup);
             ui.set_settings_cur_pwd("".into());
@@ -2299,31 +2326,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app_config = Arc::clone(&app_config);
         let hotkey_manager = Arc::clone(&hotkey_manager);
         let active_hotkey = Arc::clone(&active_hotkey);
+        let active_main_hotkey = Arc::clone(&active_main_hotkey);
         let session_password = Arc::clone(&session_password);
         let session_keyfile = Arc::clone(&session_keyfile);
         let metadata_store = Arc::clone(&metadata_store);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
 
-        move |new_path_str, new_multi, new_theme_str, new_hotkey_str, new_min_tray, new_launch_startup| {
+        move |new_path_str, new_multi, new_theme_str, new_hotkey_str, new_main_hotkey_str, new_min_tray, new_launch_startup| {
             let Some(ui) = window_weak.upgrade() else { return };
             let new_path_clean = new_path_str.trim().to_string();
             let new_theme_clean = new_theme_str.trim().to_string();
             let new_hotkey_clean = new_hotkey_str.trim().to_string();
+            let new_main_hotkey_clean = new_main_hotkey_str.trim().to_string();
 
             let parse_result = parse_hotkey_string(&new_hotkey_clean);
             let (new_hk_opt, clean_hotkey_str) = match parse_result {
                 Ok((hk, norm)) => (Some(hk), norm),
                 Err(e) => {
-                    eprintln!("Invalid hotkey entered '{}': {}", new_hotkey_clean, e);
+                    eprintln!("Invalid quick search hotkey entered '{}': {}", new_hotkey_clean, e);
                     (None, new_hotkey_clean.clone())
                 }
             };
 
+            let parse_main_result = parse_hotkey_string(&new_main_hotkey_clean);
+            let (new_main_hk_opt, clean_main_hotkey_str) = match parse_main_result {
+                Ok((hk, norm)) => (Some(hk), norm),
+                Err(e) => {
+                    eprintln!("Invalid main window hotkey entered '{}': {}", new_main_hotkey_clean, e);
+                    (None, new_main_hotkey_clean.clone())
+                }
+            };
+
             // 1. Update and save config.json
-            let (old_hotkey, old_launch, old_min_tray) = {
+            let (old_hotkey, old_main_hotkey, old_launch, old_min_tray) = {
                 let mut cfg = app_config.lock().unwrap();
                 let old_hk = cfg.global_hotkey.clone();
+                let old_main_hk = cfg.main_window_hotkey.clone();
                 let old_launch = cfg.launch_at_startup;
                 let old_min_tray = cfg.minimize_to_tray;
                 cfg.vault_path = new_path_clean.clone();
@@ -2335,12 +2374,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 cfg.theme = final_theme.to_string();
                 cfg.global_hotkey = clean_hotkey_str.clone();
+                cfg.main_window_hotkey = clean_main_hotkey_str.clone();
                 cfg.minimize_to_tray = new_min_tray;
                 cfg.launch_at_startup = new_launch_startup;
                 if let Err(e) = cfg.save() {
                     eprintln!("Failed to save config.json: {}", e);
                 }
-                (old_hk, old_launch, old_min_tray)
+                (old_hk, old_main_hk, old_launch, old_min_tray)
             };
 
             // 1b. If startup registration or minimize_to_tray changed, update startup registration
@@ -2350,7 +2390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // 1c. If hotkey changed, update global registration
+            // 1c. If Quick Search hotkey changed, update global registration
             if let Some(new_hk) = new_hk_opt {
                 if old_hotkey != clean_hotkey_str {
                     if let Some(ref mut mgr) = *hotkey_manager.lock().unwrap() {
@@ -2365,7 +2405,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            // 1d. If Main Window hotkey changed, update global registration
+            if let Some(new_main_hk) = new_main_hk_opt {
+                if old_main_hotkey != clean_main_hotkey_str {
+                    if let Some(ref mut mgr) = *hotkey_manager.lock().unwrap() {
+                        let mut cur_main_hk_guard = active_main_hotkey.lock().unwrap();
+                        if let Some(old_hk) = cur_main_hk_guard.take() {
+                            let _ = mgr.unregister(old_hk);
+                        }
+                        if let Ok(()) = mgr.register(new_main_hk) {
+                            *cur_main_hk_guard = Some(new_main_hk);
+                        }
+                    }
+                }
+            }
+
             ui.set_settings_global_hotkey(clean_hotkey_str.into());
+            ui.set_settings_main_window_hotkey(clean_main_hotkey_str.into());
             ui.set_settings_minimize_to_tray(new_min_tray);
             ui.set_settings_launch_at_startup(new_launch_startup);
 
