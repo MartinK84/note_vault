@@ -17,7 +17,7 @@ use note_vault::{
     format_markdown_export, format_unix_date, format_unix_timestamp, load_note_decrypted,
     parse_markdown_into_blocks, render_markdown_styled, sanitize_filename, save_note_encrypted,
     validate_folder_name, Note, MainWindow, NoteMetadata, QuickSearchResult, QuickSearchWindow,
-    QuickViewerWindow, TagSuggestion, Theme, UnlockWindow,
+    TagSuggestion, Theme, UnlockWindow,
 };
 use rayon::prelude::*;
 use slint::{ComponentHandle, Model};
@@ -654,30 +654,6 @@ fn setup_working_directory(args: &Args) {
     }
 }
 
-/// Activates and brings the QuickViewerWindow to the foreground on Windows.
-#[cfg(target_os = "windows")]
-fn activate_quick_viewer_window() {
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
-        fn SetForegroundWindow(hWnd: isize) -> i32;
-        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
-    }
-    unsafe {
-        let title_wide: Vec<u16> = "NoteVault Quick Viewer"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
-        if hwnd != 0 {
-            ShowWindow(hwnd, 5); // SW_SHOW
-            SetForegroundWindow(hwnd);
-        }
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn activate_quick_viewer_window() {}
 
 /// Activates and brings the UnlockWindow to the foreground on Windows.
 #[cfg(target_os = "windows")]
@@ -1259,16 +1235,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("*All Notes*".to_string()));
     let search_query: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
-    // Slint Windows: Main, QuickSearch, QuickViewer, UnlockWindow
+    // Slint Windows: Main, QuickSearch, UnlockWindow
     let main_window = MainWindow::new()?;
     main_window.window().set_size(slint::LogicalSize::new(1534.0, 740.0));
     let window_weak = main_window.as_weak();
 
     let quick_search = QuickSearchWindow::new()?;
-    let quick_viewer = QuickViewerWindow::new()?;
     let unlock_window = UnlockWindow::new()?;
     let quick_search_weak = quick_search.as_weak();
-    let quick_viewer_weak = quick_viewer.as_weak();
     let unlock_window_weak = unlock_window.as_weak();
 
     let is_unlock_window_open = Arc::new(AtomicBool::new(false));
@@ -1284,8 +1258,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.global::<Theme>().set_is_dark(is_dark);
     quick_search.global::<Theme>().set_theme(theme_name.into());
     quick_search.global::<Theme>().set_is_dark(is_dark);
-    quick_viewer.global::<Theme>().set_theme(theme_name.into());
-    quick_viewer.global::<Theme>().set_is_dark(is_dark);
     unlock_window.global::<Theme>().set_theme(theme_name.into());
     unlock_window.global::<Theme>().set_is_dark(is_dark);
     main_window.set_settings_theme(theme_name.into());
@@ -1668,13 +1640,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Helper closure for previewing note in QuickViewerWindow & zeroizing buffer
-    let handle_preview = {
+    // Helper closure for opening note in MainWindow & focusing it
+    let handle_open_note = {
+        let window_weak = window_weak.clone();
         let quick_search_weak = quick_search_weak.clone();
-        let quick_viewer_weak = quick_viewer_weak.clone();
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
         let session_keyfile = Arc::clone(&session_keyfile);
+        let vault_path = Arc::clone(&vault_path);
+        let active_folder = Arc::clone(&active_folder);
+        let search_query = Arc::clone(&search_query);
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
 
         move |note_id: slint::SharedString| {
@@ -1685,69 +1660,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if let Some(meta) = meta_opt {
-                let (pwd_opt, kf_opt) = {
-                    let s_pwd = session_password.lock().unwrap();
-                    let s_kf = session_keyfile.lock().unwrap();
-                    (s_pwd.clone(), s_kf.clone())
-                };
-                if let Some(pwd) = pwd_opt {
-                    let kf_bytes = kf_opt.as_deref().map(|b| b.as_slice());
-                    match load_note_decrypted(pwd.as_str(), kf_bytes, &meta.file_path) {
-                        Ok(mut note) => {
-                            if let Some(qv) = quick_viewer_weak.upgrade() {
-                                qv.set_note_title(note.title.as_str().into());
-                                qv.set_content(note.content.as_str().into());
+                if let Some(ui) = window_weak.upgrade() {
+                    // Unlock the main window if not already unlocked
+                    ui.set_is_locked(false);
+                    ui.set_show_welcome_modal(false);
+                    ui.set_show_unlock_modal(false);
+                    ui.set_show_unsaved_warning(false);
 
-                                // Center QuickViewerWindow on screen with enlarged dimensions
-                                let (screen_w, screen_h) = get_primary_screen_size();
-                                let scale = qv.window().scale_factor();
-                                let logical_w = if scale > 0.0 { screen_w / scale } else { screen_w };
-                                let logical_h = if scale > 0.0 { screen_h / scale } else { screen_h };
+                    // 1. Select the right folder
+                    let target_folder = if meta.category.is_empty() {
+                        "General".to_string()
+                    } else {
+                        meta.category.clone()
+                    };
+                    *active_folder.lock().unwrap() = target_folder.clone();
+                    ui.set_active_folder(target_folder.into());
 
-                                let win_w = 960.0f32.min(logical_w - 40.0);
-                                let win_h = 680.0f32.min(logical_h - 60.0);
-                                let pos_x = (logical_w - win_w) / 2.0;
-                                let pos_y = (logical_h - win_h) / 2.0;
+                    // 2. Clear any active search query so the note is visible in the note list
+                    *search_query.lock().unwrap() = String::new();
+                    ui.set_search_query("".into());
 
-                                qv.window().set_size(slint::LogicalSize::new(win_w, win_h));
-                                qv.window().set_position(slint::LogicalPosition::new(pos_x, pos_y));
+                    // 3. Refresh models for Pane 1 (folders) and Pane 2 (notes)
+                    let v_path = vault_path.lock().unwrap().clone();
+                    refresh_models(&ui, &v_path, &metadata_store, &active_folder, &search_query);
 
-                                let _ = qv.show();
-                                activate_quick_viewer_window();
-                            }
-                            note.zeroize();
-                            is_quick_search_open.store(false, Ordering::SeqCst);
-                            if let Some(qs) = quick_search_weak.upgrade() {
-                                let _ = qs.hide();
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to decrypt note for viewer: {}", e);
-                        }
-                    }
-                } else {
-                    is_quick_search_open.store(false, Ordering::SeqCst);
-                    if let Some(qs) = quick_search_weak.upgrade() {
-                        let _ = qs.hide();
-                    }
+                    // 4. Load the decrypted note into the UI editor (Pane 3)
+                    load_note_into_ui(&ui, &note_id_str, &metadata_store, &session_password, &session_keyfile);
+
+                    // 5. Restore, show, and focus MainWindow
+                    let _ = ui.show();
+                    #[cfg(target_os = "windows")]
+                    MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
+                    restore_main_window();
+                }
+
+                // Close the Quick Search window
+                is_quick_search_open.store(false, Ordering::SeqCst);
+                if let Some(qs) = quick_search_weak.upgrade() {
+                    let _ = qs.hide();
+                }
+            } else {
+                is_quick_search_open.store(false, Ordering::SeqCst);
+                if let Some(qs) = quick_search_weak.upgrade() {
+                    let _ = qs.hide();
                 }
             }
         }
     };
 
-    // Quick Search: Alt key pressed -> Preview note in QuickViewerWindow
+    // Quick Search: Alt key pressed -> Open note in MainWindow
     quick_search.on_action_alt_pressed({
-        let handle = handle_preview.clone();
+        let handle = handle_open_note.clone();
         move |note_id| handle(note_id)
     });
 
     // Quick Search: Space key pressed fallback
     quick_search.on_action_space_pressed({
-        let handle = handle_preview;
+        let handle = handle_open_note;
         move |note_id| handle(note_id)
     });
 
-    // Quick Search & Quick Viewer close handling
+    // Quick Search close handling
     quick_search.on_close_requested({
         let quick_search_weak = quick_search_weak.clone();
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
@@ -1756,31 +1729,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(qs) = quick_search_weak.upgrade() {
                 let _ = qs.hide();
             }
-        }
-    });
-
-    quick_viewer.on_close_requested({
-        let quick_viewer_weak = quick_viewer_weak.clone();
-        move || {
-            if let Some(qv) = quick_viewer_weak.upgrade() {
-                qv.invoke_clear_data();
-                qv.set_content("".into());
-                qv.set_note_title("".into());
-                let _ = qv.hide();
-            }
-        }
-    });
-
-    quick_viewer.window().on_close_requested({
-        let quick_viewer_weak = quick_viewer_weak.clone();
-        move || {
-            if let Some(qv) = quick_viewer_weak.upgrade() {
-                qv.invoke_clear_data();
-                qv.set_content("".into());
-                qv.set_note_title("".into());
-                let _ = qv.hide();
-            }
-            slint::CloseRequestResponse::HideWindow
         }
     });
 
@@ -2318,7 +2266,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.on_save_settings_requested({
         let window_weak = window_weak.clone();
         let quick_search_weak = quick_search_weak.clone();
-        let quick_viewer_weak = quick_viewer_weak.clone();
         let unlock_window_weak = unlock_window_weak.clone();
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
         let vault_path = Arc::clone(&vault_path);
@@ -2438,10 +2385,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 qs.global::<Theme>().set_theme(final_theme.into());
                 qs.global::<Theme>().set_is_dark(is_dark_mode);
             }
-            if let Some(qv) = quick_viewer_weak.upgrade() {
-                qv.global::<Theme>().set_theme(final_theme.into());
-                qv.global::<Theme>().set_is_dark(is_dark_mode);
-            }
             if let Some(uw) = unlock_window_weak.upgrade() {
                 uw.global::<Theme>().set_theme(final_theme.into());
                 uw.global::<Theme>().set_is_dark(is_dark_mode);
@@ -2469,12 +2412,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(qs) = quick_search_weak.upgrade() {
                     let _ = qs.hide();
                     qs.set_results(std::rc::Rc::new(slint::VecModel::default()).into());
-                }
-                if let Some(qv) = quick_viewer_weak.upgrade() {
-                    qv.invoke_clear_data();
-                    qv.set_content("".into());
-                    qv.set_note_title("".into());
-                    let _ = qv.hide();
                 }
 
                 ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());
@@ -2504,7 +2441,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.on_theme_changed({
         let window_weak = window_weak.clone();
         let quick_search_weak = quick_search_weak.clone();
-        let quick_viewer_weak = quick_viewer_weak.clone();
         move |theme_str| {
             let final_theme = match theme_str.trim() {
                 "blue" => "blue",
@@ -2519,10 +2455,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(qs) = quick_search_weak.upgrade() {
                 qs.global::<Theme>().set_theme(final_theme.into());
                 qs.global::<Theme>().set_is_dark(is_dark_mode);
-            }
-            if let Some(qv) = quick_viewer_weak.upgrade() {
-                qv.global::<Theme>().set_theme(final_theme.into());
-                qv.global::<Theme>().set_is_dark(is_dark_mode);
             }
         }
     });
@@ -3138,7 +3070,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.on_lock_vault({
         let window_weak = window_weak.clone();
         let quick_search_weak = quick_search_weak.clone();
-        let quick_viewer_weak = quick_viewer_weak.clone();
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
@@ -3160,12 +3091,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(qs) = quick_search_weak.upgrade() {
                 let _ = qs.hide();
                 qs.set_results(std::rc::Rc::new(slint::VecModel::default()).into());
-            }
-            if let Some(qv) = quick_viewer_weak.upgrade() {
-                qv.invoke_clear_data();
-                qv.set_content("".into());
-                qv.set_note_title("".into());
-                let _ = qv.hide();
             }
 
             ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());

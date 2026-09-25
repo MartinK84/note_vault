@@ -1,4 +1,4 @@
-import { LineEdit, TextEdit, Palette } from "std-widgets.slint";
+import { LineEdit, Palette } from "std-widgets.slint";
 import { Theme, TooltipBubble } from "theme.slint";
 
 export struct QuickSearchResult {
@@ -320,145 +320,12 @@ export component QuickSearchWindow inherits Window {
                     alignment: center;
 
                     Text {
-                        text: "↑↓ Navigate  •  [Enter] Copy to Clipboard  •  [Alt] View Note  •  [Esc] Close";
+                        text: "↑↓ Navigate  •  [Enter] Copy to Clipboard  •  [Alt] Open Note  •  [Esc] Close";
                         font-size: 11px;
                         color: Theme.text_muted;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
-                }
-            }
-        }
-    }
-}
-
-export component QuickViewerWindow inherits Window {
-    title: root.note_title != "" ? root.note_title + " - NoteVault Quick Viewer" : "NoteVault Quick Viewer";
-    icon: @image-url("../assets/icons/logo.svg");
-    preferred-width: 960px;
-    preferred-height: 680px;
-    min-width: 600px;
-    min-height: 450px;
-    background: Theme.bg_main;
-    default-font-family: "Segoe UI, Inter, sans-serif";
-
-    in-out property <string> note_title: "";
-    in-out property <string> content: "";
-
-    callback close_requested();
-
-    public function clear_data() {
-        root.note_title = "";
-        root.content = "";
-    }
-
-    init => {
-        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
-    }
-
-    property <bool> is_dark: Theme.is_dark;
-    changed is_dark => {
-        Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
-    }
-
-    FocusScope {
-        capture-key-pressed(event) => {
-            if event.text == Key.Escape {
-                root.clear_data();
-                root.close_requested();
-                return accept;
-            }
-            reject
-        }
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                root.clear_data();
-                root.close_requested();
-                return accept;
-            }
-            reject
-        }
-
-        VerticalLayout {
-            padding: 16px;
-            spacing: 12px;
-
-            // Header Bar
-            HorizontalLayout {
-                spacing: 10px;
-                alignment: start;
-                cross-axis-alignment: center;
-
-                Image {
-                    source: @image-url("../assets/icons/file.svg");
-                    width: 20px;
-                    height: 20px;
-                    colorize: Theme.accent;
-                }
-
-                Text {
-                    text: root.note_title != "" ? root.note_title : "Note Preview";
-                    font-size: 16px;
-                    font-weight: 700;
-                    color: Theme.text_primary;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                    vertical-alignment: center;
-                }
-
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: 6px;
-                    background: viewer_close_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                    viewer_close_touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.clear_data();
-                            root.close_requested();
-                        }
-                    }
-
-                    Image {
-                        source: @image-url("../assets/icons/x.svg");
-                        width: 14px;
-                        height: 14px;
-                        colorize: viewer_close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-                }
-            }
-
-            Rectangle {
-                height: 1px;
-                background: Theme.border;
-            }
-
-            // Read-only text content
-            TextEdit {
-                text: root.content;
-                read-only: true;
-                font-size: 13px;
-                wrap: word-wrap;
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-            }
-
-            Rectangle {
-                height: 1px;
-                background: Theme.border;
-            }
-
-            // Footer
-            HorizontalLayout {
-                alignment: end;
-                Text {
-                    text: "Read-only preview  •  Press Esc to close";
-                    font-size: 11px;
-                    color: Theme.text_muted;
-                    vertical-alignment: center;
                 }
             }
         }
