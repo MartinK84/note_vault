@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,11 +14,14 @@ use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use note_vault::config::AppConfig;
 use note_vault::{
-    format_decrypted_json_export, format_decrypted_txt_export, format_line_numbers,
-    format_markdown_export, format_unix_date, format_unix_timestamp, load_note_decrypted,
-    parse_markdown_into_blocks, render_markdown_styled, sanitize_filename, save_note_encrypted,
-    validate_folder_name, Note, MainWindow, NoteMetadata, QuickSearchResult, QuickSearchWindow,
-    TagSuggestion, Theme, UnlockWindow,
+    compact_note_attachments, delete_note_attachments, format_decrypted_json_export,
+    format_decrypted_txt_export, format_file_size, format_line_numbers, format_markdown_export,
+    format_unix_date, format_unix_timestamp, get_next_attachment_path, is_attachment_file,
+    list_note_attachment_files, load_attachment_decrypted, load_attachment_metadata,
+    load_note_decrypted, move_note_attachments, parse_markdown_into_blocks, render_markdown_styled,
+    sanitize_filename, save_attachment_encrypted, save_note_encrypted, validate_folder_name,
+    AttachmentItem, MainWindow, Note, NoteAttachment, NoteMetadata, QuickSearchResult,
+    QuickSearchWindow, TagSuggestion, Theme, UnlockWindow,
 };
 use rayon::prelude::*;
 use slint::{ComponentHandle, Model};
@@ -897,6 +901,34 @@ fn refresh_models(
     ui.set_vault_status_text(format!("{} note(s)", total_notes).into());
 }
 
+/// Loads and updates note attachments into the UI editor pane.
+fn update_attachments_in_ui(
+    ui: &MainWindow,
+    note_path: &Path,
+    password: &str,
+    keyfile_bytes: Option<&[u8]>,
+) {
+    let att_files = list_note_attachment_files(note_path);
+    let mut items: Vec<AttachmentItem> = Vec::new();
+    for path in &att_files {
+        if let Ok(meta) = load_attachment_metadata(password, keyfile_bytes, path) {
+            let path_str = path.to_string_lossy().to_string();
+            let size_str = format_file_size(meta.file_size);
+            let date_str = format_unix_date(meta.created_at);
+            items.push(AttachmentItem {
+                id: path_str.into(),
+                file_name: meta.file_name.into(),
+                file_size_formatted: size_str.into(),
+                created_at_formatted: date_str.into(),
+            });
+        }
+    }
+    ui.set_attachment_count(items.len() as i32);
+    let model: slint::ModelRc<AttachmentItem> =
+        std::rc::Rc::new(slint::VecModel::from(items)).into();
+    ui.set_note_attachments(model);
+}
+
 /// Loads a decrypted note into the UI editor pane and resets `has_unsaved_changes` to false.
 fn load_note_into_ui(
     ui: &MainWindow,
@@ -906,6 +938,8 @@ fn load_note_into_ui(
     session_keyfile: &Arc<Mutex<Option<Zeroizing<Vec<u8>>>>>,
 ) {
     if note_id.is_empty() {
+        ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+        ui.set_attachment_count(0);
         return;
     }
 
@@ -943,6 +977,7 @@ fn load_note_into_ui(
                     ui.set_note_markdown_rendered(render_markdown_styled(&note.content));
                     ui.set_note_content(note.content.as_str().into());
                     note.zeroize();
+                    update_attachments_in_ui(ui, &meta.file_path, &password, kf_bytes);
                 }
                 Err(e) => {
                     eprintln!("Error decrypting note at {:?}: {}", meta.file_path, e);
@@ -952,6 +987,8 @@ fn load_note_into_ui(
                     ui.set_note_content(
                         format!("[Error: Failed to decrypt note: {}]", e).into(),
                     );
+                    ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+                    ui.set_attachment_count(0);
                 }
             }
         } else {
@@ -960,6 +997,8 @@ fn load_note_into_ui(
             ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_markdown_rendered(slint::StyledText::default());
             ui.set_note_content("".into());
+            ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+            ui.set_attachment_count(0);
         }
 
         ui.set_has_unsaved_changes(false);
@@ -992,6 +1031,8 @@ fn trigger_vault_reload(
     ui.set_note_content("".into());
     ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
     ui.set_note_date("".into());
+    ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+    ui.set_attachment_count(0);
     ui.set_has_unsaved_changes(false);
 
     let weak = window_weak.clone();
@@ -1007,7 +1048,9 @@ fn trigger_vault_reload(
         {
             let p = entry.path();
             if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("vault") {
-                vault_files.push(p.to_path_buf());
+                if !is_attachment_file(p) {
+                    vault_files.push(p.to_path_buf());
+                }
             }
         }
 
@@ -3272,6 +3315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if let Some(old_file) = old_path_to_remove {
+                move_note_attachments(&old_file, &target_path);
                 let _ = std::fs::remove_file(&old_file);
             }
 
@@ -3341,6 +3385,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_note_markdown_rendered(slint::StyledText::default());
             ui.set_editor_markdown_mode(false);
             ui.set_line_numbers_text("1".into());
+            ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+            ui.set_attachment_count(0);
             ui.set_has_unsaved_changes(false);
         }
     });
@@ -3672,6 +3718,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(meta) = store.get_mut(&note_id) {
                     let old_path = meta.file_path.clone();
                     if old_path != new_path && old_path.exists() {
+                        move_note_attachments(&old_path, &new_path);
                         if let Err(e) = std::fs::rename(&old_path, &new_path) {
                             eprintln!(
                                 "Failed to move note file from {:?} to {:?}: {}",
@@ -3724,6 +3771,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if let Some(meta) = removed_meta {
+                delete_note_attachments(&meta.file_path);
                 if meta.file_path.exists() {
                     if let Err(e) = std::fs::remove_file(&meta.file_path) {
                         eprintln!("Failed to delete note file at {:?}: {}", meta.file_path, e);
@@ -3737,10 +3785,311 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_note_content("".into());
                 ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
                 ui.set_note_date("".into());
+                ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_attachment_count(0);
             }
 
             refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
             println!("[NoteVault] Deleted note {}", note_id);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Add Attachment Requested
+    // -------------------------------------------------------------
+    main_window.on_add_attachment_requested({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+        let vault_path = Arc::clone(&vault_path);
+        let active_folder = Arc::clone(&active_folder);
+        let search_query = Arc::clone(&search_query);
+
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
+                return;
+            }
+
+            let mut active_id = ui.get_active_note_id().trim().to_string();
+            if active_id.is_empty() {
+                return;
+            }
+
+            let (password_opt, keyfile_opt) = {
+                let session = session_password.lock().unwrap();
+                let keyfile = session_keyfile.lock().unwrap();
+                (session.clone(), keyfile.clone())
+            };
+            let Some(password) = password_opt else { return };
+            let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+
+            // If note is "new", auto-save it first so it exists on disk
+            let note_file_path = if active_id == "new" {
+                let current_vault = vault_path.lock().unwrap().clone();
+                let target_category = ui.get_note_category().trim().to_string();
+                let cat = if target_category.is_empty() || target_category == "*All Notes*" {
+                    "General".to_string()
+                } else {
+                    target_category
+                };
+                let category_dir = current_vault.join(&cat);
+                let _ = std::fs::create_dir_all(&category_dir);
+
+                let title_str = ui.get_note_title().trim().to_string();
+                let title = if title_str.is_empty() { "Untitled Note".to_string() } else { title_str };
+                let content = ui.get_note_content().to_string();
+                let tags: Vec<String> = ui.get_note_tags().iter().map(|s| s.to_string()).collect();
+
+                let new_note = Note::new(title.clone(), tags.clone(), content);
+                let file_path = category_dir.join(format!("{}.vault", new_note.id));
+                if let Err(e) = save_note_encrypted(&new_note, &password, kf_bytes, &file_path) {
+                    eprintln!("Failed to save new note before adding attachment: {}", e);
+                    return;
+                }
+                let new_id_str = new_note.id.to_string();
+                let now = new_note.updated_at;
+                let formatted_date = format_unix_timestamp(now);
+
+                metadata_store.lock().unwrap().insert(
+                    new_id_str.clone(),
+                    NoteMetaSummary {
+                        title: title.clone(),
+                        category: cat.clone(),
+                        tags,
+                        date: formatted_date.clone(),
+                        updated_at: now,
+                        file_path: file_path.clone(),
+                    },
+                );
+
+                ui.set_active_note_id(new_id_str.clone().into());
+                ui.set_note_date(formatted_date.into());
+                ui.set_has_unsaved_changes(false);
+                refresh_models(&ui, &current_vault, &metadata_store, &active_folder, &search_query);
+                active_id = new_id_str;
+                file_path
+            } else {
+                let store = metadata_store.lock().unwrap();
+                match store.get(&active_id) {
+                    Some(m) => m.file_path.clone(),
+                    None => return,
+                }
+            };
+
+            // Open native file picker for multiple files
+            let selected_files = rfd::FileDialog::new()
+                .set_title("Select Attachment(s)")
+                .pick_files();
+
+            let Some(files) = selected_files else { return };
+
+            for file in files {
+                let Ok(data) = fs::read(&file) else {
+                    eprintln!("Failed to read attachment file: {:?}", file);
+                    continue;
+                };
+                let file_name = file
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("attachment.bin")
+                    .to_string();
+
+                let att = NoteAttachment::new(file_name, data);
+                let att_path = get_next_attachment_path(&note_file_path);
+
+                if let Err(e) = save_attachment_encrypted(&att, &password, kf_bytes, &att_path) {
+                    eprintln!("Failed to encrypt attachment at {:?}: {}", att_path, e);
+                } else {
+                    println!("[NoteVault] Attached {:?} to note {}", att.file_name, active_id);
+                }
+            }
+
+            update_attachments_in_ui(&ui, &note_file_path, &password, kf_bytes);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Extract Attachment Requested
+    // -------------------------------------------------------------
+    main_window.on_extract_attachment_requested({
+        let window_weak = window_weak.clone();
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+
+        move |att_path_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
+                return;
+            }
+
+            let path = PathBuf::from(att_path_str.as_str());
+            if !path.exists() {
+                eprintln!("Attachment file does not exist: {:?}", path);
+                return;
+            }
+
+            let (password_opt, keyfile_opt) = {
+                let session = session_password.lock().unwrap();
+                let keyfile = session_keyfile.lock().unwrap();
+                (session.clone(), keyfile.clone())
+            };
+            let Some(password) = password_opt else { return };
+            let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+
+            match load_attachment_decrypted(&password, kf_bytes, &path) {
+                Ok(att) => {
+                    let dialog = rfd::FileDialog::new()
+                        .set_title("Save Extracted Attachment")
+                        .set_file_name(&att.file_name);
+
+                    if let Some(dest) = dialog.save_file() {
+                        if let Err(e) = fs::write(&dest, &att.data) {
+                            eprintln!("Failed to save extracted attachment to {:?}: {}", dest, e);
+                        } else {
+                            println!("[NoteVault] Extracted attachment to {:?}", dest);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to decrypt attachment at {:?}: {}", path, e);
+                }
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Replace Attachment Requested
+    // -------------------------------------------------------------
+    main_window.on_replace_attachment_requested({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+
+        move |att_path_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
+                return;
+            }
+
+            let path = PathBuf::from(att_path_str.as_str());
+            if !path.exists() {
+                eprintln!("Attachment file does not exist: {:?}", path);
+                return;
+            }
+
+            let active_id = ui.get_active_note_id().trim().to_string();
+            let note_file_path = {
+                let store = metadata_store.lock().unwrap();
+                store.get(&active_id).map(|m| m.file_path.clone())
+            };
+            let Some(note_file_path) = note_file_path else { return };
+
+            let (password_opt, keyfile_opt) = {
+                let session = session_password.lock().unwrap();
+                let keyfile = session_keyfile.lock().unwrap();
+                (session.clone(), keyfile.clone())
+            };
+            let Some(password) = password_opt else { return };
+            let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+
+            let selected_file = rfd::FileDialog::new()
+                .set_title("Select Replacement File")
+                .pick_file();
+
+            let Some(new_file) = selected_file else { return };
+
+            let Ok(data) = fs::read(&new_file) else {
+                eprintln!("Failed to read replacement file: {:?}", new_file);
+                return;
+            };
+
+            let file_name = new_file
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("attachment.bin")
+                .to_string();
+
+            let att = NoteAttachment::new(file_name, data);
+            if let Err(e) = save_attachment_encrypted(&att, &password, kf_bytes, &path) {
+                eprintln!("Failed to save replaced attachment at {:?}: {}", path, e);
+            } else {
+                println!("[NoteVault] Replaced attachment {:?} at {:?}", att.file_name, path);
+            }
+
+            update_attachments_in_ui(&ui, &note_file_path, &password, kf_bytes);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Delete Attachment Requested (opens confirmation modal)
+    // -------------------------------------------------------------
+    main_window.on_delete_attachment_requested({
+        let window_weak = window_weak.clone();
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+
+        move |att_path_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let path = PathBuf::from(att_path_str.as_str());
+
+            let (password_opt, keyfile_opt) = {
+                let session = session_password.lock().unwrap();
+                let keyfile = session_keyfile.lock().unwrap();
+                (session.clone(), keyfile.clone())
+            };
+            let filename = if let Some(pwd) = password_opt {
+                let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+                load_attachment_metadata(&pwd, kf_bytes, &path)
+                    .map(|m| m.file_name)
+                    .unwrap_or_else(|_| "Attachment".to_string())
+            } else {
+                "Attachment".to_string()
+            };
+
+            ui.set_target_attachment_id(att_path_str);
+            ui.set_target_attachment_name(filename.into());
+            ui.set_show_delete_attachment_modal(true);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Confirm Delete Attachment
+    // -------------------------------------------------------------
+    main_window.on_delete_attachment_confirmed({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+
+        move |att_path_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let path = PathBuf::from(att_path_str.as_str());
+            if path.exists() {
+                let _ = fs::remove_file(&path);
+            }
+
+            let active_id = ui.get_active_note_id().trim().to_string();
+            let note_file_path = {
+                let store = metadata_store.lock().unwrap();
+                store.get(&active_id).map(|m| m.file_path.clone())
+            };
+
+            if let Some(note_path) = note_file_path {
+                compact_note_attachments(&note_path);
+
+                let (password_opt, keyfile_opt) = {
+                    let session = session_password.lock().unwrap();
+                    let keyfile = session_keyfile.lock().unwrap();
+                    (session.clone(), keyfile.clone())
+                };
+                if let Some(password) = password_opt {
+                    let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+                    update_attachments_in_ui(&ui, &note_path, &password, kf_bytes);
+                }
+            }
         }
     });
 

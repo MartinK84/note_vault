@@ -6,6 +6,7 @@ import {
     UnsavedWarningModal, 
     DeleteFolderModal, 
     DeleteNoteModal, 
+    DeleteAttachmentModal,
     FolderModal, 
     RenameFolderModal, 
     MoveNoteModal, 
@@ -18,6 +19,13 @@ import {
 import { SettingsDialog } from "settings.slint";
 import { QuickSearchWindow, QuickSearchResult } from "quick_search.slint";
 import { UnlockWindow } from "unlock_window.slint";
+
+export struct AttachmentItem {
+    id: string,
+    file_name: string,
+    file_size_formatted: string,
+    created_at_formatted: string,
+}
 
 export struct TableRowData {
     cells: [string],
@@ -140,6 +148,14 @@ export component MainWindow inherits Window {
     in-out property <string> note_date: "";
     in-out property <string> note_content: "";
 
+    // --- Attachment Management ---
+    in-out property <[AttachmentItem]> note_attachments: [];
+    in-out property <int> attachment_count: 0;
+    in-out property <bool> attachments_expanded: true;
+    in-out property <bool> show_delete_attachment_modal: false;
+    in-out property <string> target_attachment_id: "";
+    in-out property <string> target_attachment_name: "";
+
     // --- Note Editor Toolbar & Preferences State ---
     in-out property <bool> editor_markdown_mode: false;
     in-out property <styled-text> note_markdown_rendered;
@@ -205,6 +221,11 @@ export component MainWindow inherits Window {
     callback delete_folder_confirmed(string); // folder_name
     callback move_note_confirmed(string, string); // note_id, target_folder
     callback delete_note_confirmed(string); // note_id
+    callback add_attachment_requested();
+    callback extract_attachment_requested(string); // attachment_id
+    callback replace_attachment_requested(string); // attachment_id
+    callback delete_attachment_requested(string); // attachment_id
+    callback delete_attachment_confirmed(string); // attachment_id
     callback remove_tag_requested(int); // tag index
     callback open_add_tag_requested();
     callback tag_search_changed(string);
@@ -1787,6 +1808,53 @@ export component MainWindow inherits Window {
                                 background: Colors.transparent;
                             }
 
+                            // Attach File Button
+                            attach_file_btn := Rectangle {
+                                height: 26px;
+                                border-radius: 5px;
+                                background: att_btn_touch.has-hover ? Theme.hover : Theme.bg_secondary;
+                                border-width: 1px;
+                                border-color: att_btn_touch.has-hover ? Theme.border_active : Theme.border;
+                                animate background { duration: 120ms; }
+
+                                att_btn_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.add_attachment_requested();
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 10px;
+                                    spacing: 5px;
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/paperclip.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: att_btn_touch.has-hover ? Theme.accent : Theme.text_secondary;
+                                    }
+
+                                    Text {
+                                        text: "Attach File";
+                                        font-size: 11px;
+                                        font-weight: 500;
+                                        color: att_btn_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                TooltipBubble {
+                                    text: "Attach file(s) to this note";
+                                    show: att_btn_touch.has-hover;
+                                    x: (parent.width - self.width) / 2;
+                                    y: parent.height + 4px;
+                                }
+                            }
+
                             // 5. Export Decrypted Note as JSON
                             export_json_btn := Rectangle {
                                 height: 26px;
@@ -2365,6 +2433,393 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+
+                    // ==========================================
+                    // ATTACHMENTS DOCKED DRAWER / PANEL
+                    // ==========================================
+                    attachments_panel := Rectangle {
+                        vertical-stretch: 0;
+                        background: Theme.bg_surface;
+
+                        // Top border
+                        Rectangle {
+                            x: 0px;
+                            y: 0px;
+                            width: parent.width;
+                            height: 1px;
+                            background: Theme.border;
+                        }
+
+                        VerticalLayout {
+                            padding: 0px;
+                            spacing: 0px;
+
+                            // Attachments Header Bar (Height 34px)
+                            Rectangle {
+                                height: 34px;
+                                background: Theme.bg_surface;
+
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    spacing: 10px;
+                                    alignment: space-between;
+                                    cross-axis-alignment: center;
+
+                                    // Left: Toggle header (Paperclip + "Attachments" + Badge count + expand toggle)
+                                    Rectangle {
+                                        height: 26px;
+                                        border-radius: 5px;
+                                        background: toggle_att_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                                        toggle_att_touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.attachments_expanded = !root.attachments_expanded;
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 6px;
+                                            padding-right: 8px;
+                                            spacing: 6px;
+                                            alignment: start;
+                                            cross-axis-alignment: center;
+
+                                            Image {
+                                                source: @image-url("../assets/icons/paperclip.svg");
+                                                width: 14px;
+                                                height: 14px;
+                                                colorize: root.note_attachments.length > 0 ? Theme.accent : Theme.text_secondary;
+                                            }
+
+                                            Text {
+                                                text: "Attachments";
+                                                font-size: 12px;
+                                                font-weight: 600;
+                                                color: Theme.text_primary;
+                                                vertical-alignment: center;
+                                            }
+
+                                            // Count Badge
+                                            Rectangle {
+                                                height: 18px;
+                                                border-radius: 9px;
+                                                background: root.note_attachments.length > 0 ? Theme.bg_active : Theme.bg_secondary;
+                                                border-width: 1px;
+                                                border-color: root.note_attachments.length > 0 ? Theme.accent : Theme.border;
+
+                                                HorizontalLayout {
+                                                    padding-left: 7px;
+                                                    padding-right: 7px;
+                                                    alignment: center;
+                                                    cross-axis-alignment: center;
+
+                                                    Text {
+                                                        text: root.note_attachments.length;
+                                                        font-size: 11px;
+                                                        font-weight: 700;
+                                                        color: root.note_attachments.length > 0 ? Theme.accent : Theme.text_muted;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: root.attachments_expanded ? "▾" : "▸";
+                                                font-size: 12px;
+                                                color: Theme.text_muted;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        TooltipBubble {
+                                            text: root.attachments_expanded ? "Collapse attachments" : "Expand attachments";
+                                            show: toggle_att_touch.has-hover;
+                                            x: 0px;
+                                            y: -28px;
+                                        }
+                                    }
+
+                                    // Right: "+ Add File" button
+                                    Rectangle {
+                                        height: 24px;
+                                        border-radius: 4px;
+                                        background: add_att_btn_touch.has-hover ? Theme.accent_hover : Theme.accent;
+                                        animate background { duration: 120ms; }
+
+                                        add_att_btn_touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.add_attachment_requested();
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            spacing: 4px;
+                                            alignment: center;
+                                            cross-axis-alignment: center;
+
+                                            Image {
+                                                source: @image-url("../assets/icons/plus.svg");
+                                                width: 11px;
+                                                height: 11px;
+                                                colorize: Theme.accent_text;
+                                            }
+
+                                            Text {
+                                                text: "Add File";
+                                                font-size: 11px;
+                                                font-weight: 600;
+                                                color: Theme.accent_text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        TooltipBubble {
+                                            text: "Add one or multiple attachments";
+                                            show: add_att_btn_touch.has-hover;
+                                            x: parent.width - self.width;
+                                            y: -28px;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Expandable Attachments Body
+                            if root.attachments_expanded : Rectangle {
+                                height: root.note_attachments.length == 0 ? 48px : 86px;
+                                background: Theme.bg_main;
+
+                                // Top border inside panel
+                                Rectangle {
+                                    x: 0px;
+                                    y: 0px;
+                                    width: parent.width;
+                                    height: 1px;
+                                    background: Theme.border;
+                                }
+
+                                // 1. Empty State
+                                if root.note_attachments.length == 0 : HorizontalLayout {
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+                                    spacing: 8px;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/paperclip.svg");
+                                        width: 14px;
+                                        height: 14px;
+                                        colorize: Theme.text_muted;
+                                    }
+
+                                    Text {
+                                        text: "No attachments in this note. Click '+ Add File' to attach documents, images, or archives.";
+                                        font-size: 12px;
+                                        color: Theme.text_muted;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // 2. Attachments Cards Horizontal ScrollView
+                                if root.note_attachments.length > 0 : ScrollView {
+                                    width: 100%;
+                                    height: 100%;
+                                    content-width: max(self.visible-width, root.note_attachments.length * 270px + 28px);
+                                    content-height: self.visible-height;
+
+                                    HorizontalLayout {
+                                        padding-top: 10px;
+                                        padding-bottom: 10px;
+                                        padding-left: 14px;
+                                        padding-right: 14px;
+                                        spacing: 12px;
+                                        alignment: start;
+                                        cross-axis-alignment: center;
+
+                                        for att in root.note_attachments : Rectangle {
+                                            width: 258px;
+                                            height: 64px;
+                                            border-radius: 8px;
+                                            background: att_card_touch.has-hover ? Theme.hover : Theme.bg_secondary;
+                                            border-width: 1px;
+                                            border-color: att_card_touch.has-hover ? Theme.border_active : Theme.border;
+                                            animate background { duration: 120ms; }
+                                            clip: true;
+
+                                            att_card_touch := TouchArea {}
+
+                                            HorizontalLayout {
+                                                padding: 8px;
+                                                spacing: 8px;
+                                                alignment: space-between;
+                                                cross-axis-alignment: center;
+
+                                                // Left: File icon container
+                                                Rectangle {
+                                                    width: 36px;
+                                                    height: 36px;
+                                                    border-radius: 6px;
+                                                    background: Theme.bg_active;
+
+                                                    Image {
+                                                        source: @image-url("../assets/icons/file.svg");
+                                                        width: 18px;
+                                                        height: 18px;
+                                                        colorize: Theme.accent;
+                                                        x: (parent.width - self.width) / 2;
+                                                        y: (parent.height - self.height) / 2;
+                                                    }
+                                                }
+
+                                                // Center: File Details (Name, Size, Date)
+                                                VerticalLayout {
+                                                    horizontal-stretch: 1;
+                                                    spacing: 3px;
+                                                    alignment: center;
+
+                                                    Text {
+                                                        text: att.file_name;
+                                                        font-size: 12px;
+                                                        font-weight: 600;
+                                                        color: Theme.text_primary;
+                                                        overflow: elide;
+                                                    }
+
+                                                    HorizontalLayout {
+                                                        spacing: 6px;
+                                                        alignment: start;
+
+                                                        Text {
+                                                            text: att.file_size_formatted;
+                                                            font-size: 11px;
+                                                            font-weight: 500;
+                                                            color: Theme.text_secondary;
+                                                        }
+
+                                                        Text {
+                                                            text: "•";
+                                                            font-size: 10px;
+                                                            color: Theme.text_muted;
+                                                        }
+
+                                                        Text {
+                                                            text: att.created_at_formatted;
+                                                            font-size: 10px;
+                                                            color: Theme.text_muted;
+                                                            overflow: elide;
+                                                        }
+                                                    }
+                                                }
+
+                                                // Right: Action Buttons (Extract, Replace, Delete)
+                                                HorizontalLayout {
+                                                    spacing: 3px;
+                                                    alignment: end;
+                                                    cross-axis-alignment: center;
+
+                                                    // Extract / Download Button
+                                                    Rectangle {
+                                                        width: 24px;
+                                                        height: 24px;
+                                                        border-radius: 4px;
+                                                        background: extract_touch.has-hover ? Theme.bg_active : Colors.transparent;
+
+                                                        extract_touch := TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => {
+                                                                root.extract_attachment_requested(att.id);
+                                                            }
+                                                        }
+
+                                                        Image {
+                                                            source: @image-url("../assets/icons/download.svg");
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            colorize: extract_touch.has-hover ? Theme.accent : Theme.text_secondary;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                        }
+
+                                                        TooltipBubble {
+                                                            text: "Extract / Save to disk";
+                                                            show: extract_touch.has-hover;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: -28px;
+                                                        }
+                                                    }
+
+                                                    // Replace Button
+                                                    Rectangle {
+                                                        width: 24px;
+                                                        height: 24px;
+                                                        border-radius: 4px;
+                                                        background: rep_touch.has-hover ? Theme.bg_active : Colors.transparent;
+
+                                                        rep_touch := TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => {
+                                                                root.replace_attachment_requested(att.id);
+                                                            }
+                                                        }
+
+                                                        Image {
+                                                            source: @image-url("../assets/icons/refresh.svg");
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            colorize: rep_touch.has-hover ? Theme.accent : Theme.text_secondary;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                        }
+
+                                                        TooltipBubble {
+                                                            text: "Replace with new file";
+                                                            show: rep_touch.has-hover;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: -28px;
+                                                        }
+                                                    }
+
+                                                    // Delete Button
+                                                    Rectangle {
+                                                        width: 24px;
+                                                        height: 24px;
+                                                        border-radius: 4px;
+                                                        background: del_att_touch.has-hover ? Theme.danger_subtle : Colors.transparent;
+
+                                                        del_att_touch := TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => {
+                                                                root.delete_attachment_requested(att.id);
+                                                            }
+                                                        }
+
+                                                        Image {
+                                                            source: @image-url("../assets/icons/trash.svg");
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            colorize: del_att_touch.has-hover ? Theme.danger : Theme.text_muted;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                        }
+
+                                                        TooltipBubble {
+                                                            text: "Delete attachment";
+                                                            show: del_att_touch.has-hover;
+                                                            x: parent.width - self.width;
+                                                            y: -28px;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
             }
 
             if root.is_locked : Rectangle {
@@ -2508,6 +2963,15 @@ export component MainWindow inherits Window {
         delete => {
             root.show_delete_note_modal = false;
             root.delete_note_confirmed(root.target_note_id);
+        }
+    }
+
+    if root.show_delete_attachment_modal : DeleteAttachmentModal {
+        file_name: root.target_attachment_name;
+        cancel => { root.show_delete_attachment_modal = false; }
+        delete => {
+            root.show_delete_attachment_modal = false;
+            root.delete_attachment_confirmed(root.target_attachment_id);
         }
     }
 

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod attachment;
 pub mod config;
 pub mod export;
 pub mod markdown;
@@ -28,6 +29,7 @@ pub mod validation;
 
 slint::include_modules!();
 
+pub use attachment::*;
 pub use export::*;
 pub use markdown::*;
 pub use single_instance::*;
@@ -201,23 +203,16 @@ pub fn derive_key_legacy(password: &str, salt: &[u8; SALT_LEN]) -> Result<Zeroiz
     Ok(key)
 }
 
-/// Serializes, encrypts, and writes a `Note` to disk using the cryptographic cascade
-/// (AES-256-GCM + XChaCha20-Poly1305).
+/// Encrypts an arbitrary plaintext byte slice using the cryptographic cascade
+/// (AES-256-GCM + XChaCha20-Poly1305) with version 0x02.
 ///
 /// Binary layout:
 /// `[Version (1B, 0x02)] + [Argon2 Salt (32B)] + [AES Nonce (12B)] + [XChaCha Nonce (24B)] + [Final Ciphertext]`
-///
-/// Security properties:
-/// - Salt and Nonces are cryptographically securely generated using `rand_core::OsRng`.
-/// - 64-byte key derived with Argon2id, incorporating optional BLAKE3 keyfile hash as secret pepper.
-/// - Double-layer authenticated encryption: AES-256-GCM inside XChaCha20-Poly1305.
-/// - Plaintext serialized buffer, intermediate buffers, and derived keys are securely zeroized from RAM.
-pub fn save_note_encrypted(
-    note: &Note,
+pub fn encrypt_bytes(
+    plaintext: &[u8],
     password: &str,
     keyfile_bytes: Option<&[u8]>,
-    output_path: &Path,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Vec<u8>, VaultError> {
     // 1. Generate unique 32-byte salt using OsRng
     let mut salt = [0u8; SALT_LEN];
     OsRng.fill_bytes(&mut salt);
@@ -240,23 +235,19 @@ pub fn save_note_encrypted(
     chacha_key.copy_from_slice(&derived_key[32..]);
     drop(derived_key);
 
-    // 5. Serialize note to JSON in a zeroizable buffer
-    let plaintext_json = Zeroizing::new(serde_json::to_vec(note)?);
-
-    // 6. Encrypt plaintext JSON with AES-256-GCM (inner encryption)
+    // 5. Encrypt plaintext with AES-256-GCM (inner encryption)
     let aes_cipher = Aes256Gcm::new_from_slice(aes_key.as_ref())
         .map_err(|_| VaultError::EncryptionFailed)?;
     let inner_ciphertext = Zeroizing::new(
         aes_cipher
-            .encrypt(&aes_nonce, plaintext_json.as_slice())
+            .encrypt(&aes_nonce, plaintext)
             .map_err(|_| VaultError::EncryptionFailed)?,
     );
 
-    // Immediately zeroize plaintext JSON buffer and AES key
-    drop(plaintext_json);
+    // Immediately zeroize AES key
     drop(aes_key);
 
-    // 7. Encrypt resulting AES ciphertext with XChaCha20-Poly1305 (outer encryption)
+    // 6. Encrypt resulting AES ciphertext with XChaCha20-Poly1305 (outer encryption)
     let chacha_cipher = XChaCha20Poly1305::new(Key::from_slice(chacha_key.as_ref()));
     let final_ciphertext = chacha_cipher
         .encrypt(chacha_nonce, inner_ciphertext.as_slice())
@@ -265,7 +256,7 @@ pub fn save_note_encrypted(
     drop(inner_ciphertext);
     drop(chacha_key);
 
-    // 8. Assemble binary payload:
+    // 7. Assemble binary payload:
     // [Version (1B)] + [Salt (32B)] + [AES Nonce (12B)] + [XChaCha Nonce (24B)] + [Final Ciphertext]
     let total_len = CASCADE_HEADER_LEN + final_ciphertext.len();
     let mut binary_data = Vec::with_capacity(total_len);
@@ -275,7 +266,22 @@ pub fn save_note_encrypted(
     binary_data.extend_from_slice(&chacha_nonce_bytes);
     binary_data.extend_from_slice(&final_ciphertext);
 
-    // 9. Ensure parent directory exists and write file to disk
+    Ok(binary_data)
+}
+
+/// Serializes, encrypts, and writes a `Note` to disk using the cryptographic cascade
+/// (AES-256-GCM + XChaCha20-Poly1305).
+pub fn save_note_encrypted(
+    note: &Note,
+    password: &str,
+    keyfile_bytes: Option<&[u8]>,
+    output_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let plaintext_json = Zeroizing::new(serde_json::to_vec(note)?);
+    let binary_data = encrypt_bytes(plaintext_json.as_slice(), password, keyfile_bytes)?;
+    drop(plaintext_json);
+
+    // Ensure parent directory exists and write file to disk
     if let Some(parent) = output_path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
@@ -286,29 +292,22 @@ pub fn save_note_encrypted(
     Ok(())
 }
 
-/// Reads, decrypts, and deserializes a `Note` from disk.
-///
-/// Supports:
-/// - Version `0x02` Cascade format: outer XChaCha20-Poly1305 + inner AES-256-GCM.
-/// - Legacy format: 56-byte header with single-layer XChaCha20-Poly1305 (automatic backward compatibility).
-/// - Plaintext buffers and derived keys are securely zeroized from RAM.
-pub fn load_note_decrypted(
+/// Decrypts raw file bytes using either Cascade Version 0x02 or Legacy format.
+/// Returns the decrypted plaintext wrapped in a `Zeroizing` buffer.
+pub fn decrypt_bytes(
+    file_data: &[u8],
     password: &str,
     keyfile_bytes: Option<&[u8]>,
-    input_path: &Path,
-) -> Result<Note, Box<dyn Error>> {
-    // 1. Read encrypted file from disk
-    let file_data = fs::read(input_path)?;
-
+) -> Result<Zeroizing<Vec<u8>>, VaultError> {
     if file_data.len() < LEGACY_HEADER_LEN + TAG_LEN {
-        return Err(Box::new(VaultError::InvalidFileFormat(format!(
+        return Err(VaultError::InvalidFileFormat(format!(
             "File size ({} bytes) is too small to contain valid header (expected at least {} bytes)",
             file_data.len(),
             LEGACY_HEADER_LEN + TAG_LEN
-        ))));
+        )));
     }
 
-    // 2. Check for Cascade Version 0x02 layout
+    // 1. Check for Cascade Version 0x02 layout
     if file_data[0] == CASCADE_VERSION && file_data.len() >= CASCADE_HEADER_LEN + TAG_LEN + TAG_LEN {
         let salt_end = 1 + SALT_LEN; // 33
         let aes_nonce_end = salt_end + AES_NONCE_LEN; // 45
@@ -324,7 +323,7 @@ pub fn load_note_decrypted(
         let chacha_nonce = XNonce::from_slice(&file_data[aes_nonce_end..chacha_nonce_end]);
         let outer_ciphertext = &file_data[chacha_nonce_end..];
 
-        let cascade_res: Result<Note, VaultError> = (|| {
+        let cascade_res: Result<Zeroizing<Vec<u8>>, VaultError> = (|| {
             let derived_key = derive_key(password, keyfile_bytes, salt)?;
             let mut aes_key = Zeroizing::new([0u8; 32]);
             let mut chacha_key = Zeroizing::new([0u8; 32]);
@@ -352,34 +351,29 @@ pub fn load_note_decrypted(
             drop(inner_ciphertext);
             drop(aes_key);
 
-            let note: Note = serde_json::from_slice(decrypted_buffer.as_slice())
-                .map_err(VaultError::Serialization)?;
-            drop(decrypted_buffer);
-
-            Ok(note)
+            Ok(decrypted_buffer)
         })();
 
         match cascade_res {
-            Ok(note) => return Ok(note),
+            Ok(buf) => return Ok(buf),
             Err(e) => {
                 // If cascade decryption failed, check if this could be a legacy file whose
                 // first random salt byte happened to match 0x02.
                 if keyfile_bytes.is_none() && file_data.len() >= LEGACY_HEADER_LEN + TAG_LEN {
-                    if let Ok(legacy_note) = decrypt_legacy(&file_data, password) {
-                        return Ok(legacy_note);
+                    if let Ok(legacy_buf) = decrypt_legacy_bytes(file_data, password) {
+                        return Ok(legacy_buf);
                     }
                 }
-                return Err(Box::new(e));
+                return Err(e);
             }
         }
     }
 
-    // 3. Fallback to Legacy layout (XChaCha20-Poly1305 with 32B key)
-    let note = decrypt_legacy(&file_data, password)?;
-    Ok(note)
+    // 2. Fallback to Legacy layout (XChaCha20-Poly1305 with 32B key)
+    decrypt_legacy_bytes(file_data, password)
 }
 
-fn decrypt_legacy(file_data: &[u8], password: &str) -> Result<Note, VaultError> {
+fn decrypt_legacy_bytes(file_data: &[u8], password: &str) -> Result<Zeroizing<Vec<u8>>, VaultError> {
     if file_data.len() < LEGACY_HEADER_LEN + TAG_LEN {
         return Err(VaultError::InvalidFileFormat(format!(
             "File size ({} bytes) is too small to contain valid legacy header",
@@ -400,25 +394,39 @@ fn decrypt_legacy(file_data: &[u8], password: &str) -> Result<Note, VaultError> 
         .decrypt(nonce, ciphertext)
         .map_err(|_| VaultError::DecryptionFailed)?;
 
-    let decrypted_buffer = Zeroizing::new(decrypted_bytes);
+    Ok(Zeroizing::new(decrypted_bytes))
+}
+
+/// Reads, decrypts, and deserializes a `Note` from disk.
+///
+/// Supports:
+/// - Version `0x02` Cascade format: outer XChaCha20-Poly1305 + inner AES-256-GCM.
+/// - Legacy format: 56-byte header with single-layer XChaCha20-Poly1305 (automatic backward compatibility).
+/// - Plaintext buffers and derived keys are securely zeroized from RAM.
+pub fn load_note_decrypted(
+    password: &str,
+    keyfile_bytes: Option<&[u8]>,
+    input_path: &Path,
+) -> Result<Note, Box<dyn Error>> {
+    let file_data = fs::read(input_path)?;
+    let decrypted_buffer = decrypt_bytes(&file_data, password, keyfile_bytes)?;
     let note: Note = serde_json::from_slice(decrypted_buffer.as_slice())
         .map_err(VaultError::Serialization)?;
     drop(decrypted_buffer);
-
     Ok(note)
 }
 
 /// Atomically re-encrypts all `.vault` files found recursively within `vault_dir`.
 ///
 /// 1. Finds all files with `.vault` extension (excluding `.vault.new` and temporary files).
-/// 2. Decrypts each file using `current_password` and `current_keyfile` into memory (`Note`),
+/// 2. Decrypts each file using `current_password` and `current_keyfile` into memory,
 ///    then re-encrypts it using `new_password` and `new_keyfile` in the new Cascade (`0x02`)
-///    format to `<filename>.vault.new`. The decrypted in-memory `Note` is zeroized.
+///    format to `<filename>.vault.new`. The decrypted in-memory payload is zeroized.
 /// 3. If any file fails during decryption or write, all created `.vault.new` files are removed
 ///    and an error is returned. The original `.vault` files remain untouched.
 /// 4. Once all files have been safely staged as `.vault.new`, they are atomically renamed to `.vault`.
 ///
-/// Returns the number of notes successfully re-encrypted.
+/// Returns the number of files successfully re-encrypted.
 pub fn reencrypt_vault_atomic<F>(
     vault_dir: &Path,
     current_password: &str,
@@ -468,11 +476,11 @@ where
     for (idx, (orig_path, new_path)) in staging_pairs.iter().enumerate() {
         progress_callback(idx + 1, total);
 
-        let mut note = match load_note_decrypted(current_password, current_keyfile, orig_path) {
-            Ok(n) => n,
+        let file_data = match fs::read(orig_path) {
+            Ok(d) => d,
             Err(e) => {
                 failure = Some(format!(
-                    "Failed to decrypt note {:?}: {}",
+                    "Failed to read file {:?}: {}",
                     orig_path.file_name().unwrap_or_default(),
                     e
                 ).into());
@@ -480,12 +488,35 @@ where
             }
         };
 
-        let save_res = save_note_encrypted(&note, new_password, new_keyfile, new_path);
-        note.zeroize();
+        let decrypted_payload = match decrypt_bytes(&file_data, current_password, current_keyfile) {
+            Ok(d) => d,
+            Err(e) => {
+                failure = Some(format!(
+                    "Failed to decrypt {:?}: {}",
+                    orig_path.file_name().unwrap_or_default(),
+                    e
+                ).into());
+                break;
+            }
+        };
 
-        if let Err(e) = save_res {
+        let encrypted_payload = match encrypt_bytes(decrypted_payload.as_slice(), new_password, new_keyfile) {
+            Ok(d) => d,
+            Err(e) => {
+                failure = Some(format!(
+                    "Failed to encrypt {:?}: {}",
+                    new_path.file_name().unwrap_or_default(),
+                    e
+                ).into());
+                break;
+            }
+        };
+
+        drop(decrypted_payload);
+
+        if let Err(e) = fs::write(new_path, &encrypted_payload) {
             failure = Some(format!(
-                "Failed to write re-encrypted note {:?}: {}",
+                "Failed to write re-encrypted file {:?}: {}",
                 new_path.file_name().unwrap_or_default(),
                 e
             ).into());
