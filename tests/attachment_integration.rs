@@ -2,9 +2,9 @@ use std::fs;
 use note_vault::{
     attachment::{
         compact_note_attachments, delete_note_attachments, format_file_size,
-        get_next_attachment_path, is_attachment_file, list_note_attachment_files,
-        load_attachment_decrypted, load_attachment_metadata, move_note_attachments,
-        save_attachment_encrypted, NoteAttachment,
+        get_next_attachment_path, is_attachment_file, is_image_filename, is_text_data,
+        is_text_filename, list_note_attachment_files, load_attachment_decrypted,
+        load_attachment_metadata, move_note_attachments, save_attachment_encrypted, NoteAttachment,
     },
     load_note_decrypted, reencrypt_vault_atomic, save_note_encrypted, Note,
 };
@@ -187,6 +187,54 @@ fn test_attachment_full_lifecycle_and_reencrypt() {
     // 10. Test deleting all attachments
     delete_note_attachments(&new_note_path);
     assert_eq!(list_note_attachment_files(&new_note_path).len(), 0);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_attachment_preview_and_type_resolution() {
+    let temp_dir = std::env::temp_dir().join(format!("note_vault_preview_test_{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).unwrap();
+    let note_path = temp_dir.join("preview_note.vault");
+    let password = "PreviewPassword2026!";
+
+    // Text attachment
+    let text_content = "fn main() {\n    println!(\"Hello encrypted preview!\");\n}";
+    let text_att = NoteAttachment::new("code.rs", text_content.as_bytes().to_vec());
+    let att1_path = get_next_attachment_path(&note_path);
+    save_attachment_encrypted(&text_att, password, None, &att1_path).unwrap();
+
+    // Image attachment
+    let fake_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let img_att = NoteAttachment::new("screenshot.PNG", fake_png.clone());
+    let att2_path = get_next_attachment_path(&note_path);
+    save_attachment_encrypted(&img_att, password, None, &att2_path).unwrap();
+
+    // Binary / unsupported preview attachment
+    let bin_data = vec![0x00, 0x01, 0x02, 0xFF, 0xFE];
+    let bin_att = NoteAttachment::new("archive.zip", bin_data.clone());
+    let att3_path = get_next_attachment_path(&note_path);
+    save_attachment_encrypted(&bin_att, password, None, &att3_path).unwrap();
+
+    // Load and test preview resolution
+    let loaded1 = load_attachment_decrypted(password, None, &att1_path).unwrap();
+    assert_eq!(loaded1.file_name, "code.rs");
+    assert!(is_text_filename(&loaded1.file_name));
+    assert!(is_text_data(&loaded1.data));
+    assert!(!is_image_filename(&loaded1.file_name));
+    let decoded_text = String::from_utf8(loaded1.data).unwrap();
+    assert_eq!(decoded_text, text_content);
+
+    let loaded2 = load_attachment_decrypted(password, None, &att2_path).unwrap();
+    assert_eq!(loaded2.file_name, "screenshot.PNG");
+    assert!(is_image_filename(&loaded2.file_name));
+    assert!(!is_text_filename(&loaded2.file_name));
+
+    let loaded3 = load_attachment_decrypted(password, None, &att3_path).unwrap();
+    assert_eq!(loaded3.file_name, "archive.zip");
+    assert!(!is_image_filename(&loaded3.file_name));
+    assert!(!is_text_filename(&loaded3.file_name));
+    assert!(!is_text_data(&loaded3.data));
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

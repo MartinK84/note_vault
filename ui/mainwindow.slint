@@ -7,6 +7,7 @@ import {
     DeleteFolderModal, 
     DeleteNoteModal, 
     DeleteAttachmentModal,
+    AttachmentPreviewModal,
     FolderModal, 
     RenameFolderModal, 
     MoveNoteModal, 
@@ -155,6 +156,16 @@ export component MainWindow inherits Window {
     in-out property <bool> show_delete_attachment_modal: false;
     in-out property <string> target_attachment_id: "";
     in-out property <string> target_attachment_name: "";
+    in-out property <bool> show_attachment_preview_modal: false;
+    in-out property <string> preview_attachment_id: "";
+    in-out property <string> preview_file_name: "";
+    in-out property <string> preview_file_size: "";
+    in-out property <string> preview_created_at: "";
+    in-out property <bool> preview_is_image: false;
+    in-out property <image> preview_image;
+    in-out property <bool> preview_is_text: false;
+    in-out property <string> preview_text: "";
+    in-out property <string> preview_error: "";
 
     // --- Note Editor Toolbar & Preferences State ---
     in-out property <bool> editor_markdown_mode: false;
@@ -222,6 +233,7 @@ export component MainWindow inherits Window {
     callback move_note_confirmed(string, string); // note_id, target_folder
     callback delete_note_confirmed(string); // note_id
     callback add_attachment_requested();
+    callback preview_attachment_requested(string); // attachment_id
     callback extract_attachment_requested(string); // attachment_id
     callback replace_attachment_requested(string); // attachment_id
     callback delete_attachment_requested(string); // attachment_id
@@ -266,6 +278,7 @@ export component MainWindow inherits Window {
             && !root.show_delete_folder_modal
             && !root.show_delete_note_modal
             && !root.show_delete_attachment_modal
+            && !root.show_attachment_preview_modal
             && !root.show_folder_modal
             && !root.show_rename_folder_modal
             && !root.show_move_note_modal
@@ -303,6 +316,10 @@ export component MainWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(event) => {
+            if root.show_attachment_preview_modal && event.text == Key.Escape {
+                root.show_attachment_preview_modal = false;
+                return accept;
+            }
             let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
                 (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
                 || event.text == "\u{0013}"
@@ -315,6 +332,10 @@ export component MainWindow inherits Window {
         }
 
         key-pressed(event) => {
+            if root.show_attachment_preview_modal && event.text == Key.Escape {
+                root.show_attachment_preview_modal = false;
+                return accept;
+            }
             let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
                 (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
                 || event.text == "\u{0013}"
@@ -1351,6 +1372,10 @@ export component MainWindow inherits Window {
                 height: parent.height;
 
                 capture-key-pressed(event) => {
+                    if root.show_attachment_preview_modal && event.text == Key.Escape {
+                        root.show_attachment_preview_modal = false;
+                        return accept;
+                    }
                     let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
                         (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
                         || event.text == "\u{0013}"
@@ -1363,6 +1388,10 @@ export component MainWindow inherits Window {
                 }
 
                 key-pressed(event) => {
+                    if root.show_attachment_preview_modal && event.text == Key.Escape {
+                        root.show_attachment_preview_modal = false;
+                        return accept;
+                    }
                     let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
                         (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
                         || event.text == "\u{0013}"
@@ -2601,11 +2630,11 @@ export component MainWindow inherits Window {
                                                 }
                                             }
 
-                                            Text {
-                                                text: root.attachments_expanded ? "▾" : "▸";
-                                                font-size: 12px;
-                                                color: Theme.text_muted;
-                                                vertical-alignment: center;
+                                            Image {
+                                                source: root.attachments_expanded ? @image-url("../assets/icons/chevron-down.svg") : @image-url("../assets/icons/chevron-right.svg");
+                                                width: 12px;
+                                                height: 12px;
+                                                colorize: Theme.text_muted;
                                             }
                                         }
 
@@ -2666,7 +2695,7 @@ export component MainWindow inherits Window {
 
                             // Expandable Attachments Body
                             if root.attachments_expanded : Rectangle {
-                                height: root.note_attachments.length == 0 ? 48px : 86px;
+                                height: root.note_attachments.length == 0 ? 48px : 98px;
                                 background: Theme.bg_main;
 
                                 // Top border inside panel
@@ -2703,12 +2732,12 @@ export component MainWindow inherits Window {
                                 if root.note_attachments.length > 0 : ScrollView {
                                     width: 100%;
                                     height: 100%;
-                                    content-width: max(self.visible-width, root.note_attachments.length * 270px + 28px);
+                                    content-width: max(self.visible-width, root.note_attachments.length * 280px + 28px);
                                     content-height: self.visible-height;
 
                                     HorizontalLayout {
-                                        padding-top: 10px;
-                                        padding-bottom: 10px;
+                                        padding-top: 16px;
+                                        padding-bottom: 14px;
                                         padding-left: 14px;
                                         padding-right: 14px;
                                         spacing: 12px;
@@ -2716,16 +2745,21 @@ export component MainWindow inherits Window {
                                         cross-axis-alignment: center;
 
                                         for att in root.note_attachments : Rectangle {
-                                            width: 258px;
+                                            width: 268px;
                                             height: 64px;
                                             border-radius: 8px;
                                             background: att_card_touch.has-hover ? Theme.hover : Theme.bg_secondary;
                                             border-width: 1px;
                                             border-color: att_card_touch.has-hover ? Theme.border_active : Theme.border;
                                             animate background { duration: 120ms; }
-                                            clip: true;
+                                            z: (del_att_touch.has-hover || rep_touch.has-hover || extract_touch.has-hover || prev_touch.has-hover || att_card_touch.has-hover) ? 100 : 1;
 
-                                            att_card_touch := TouchArea {}
+                                            att_card_touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    root.preview_attachment_requested(att.id);
+                                                }
+                                            }
 
                                             HorizontalLayout {
                                                 padding: 8px;
@@ -2790,11 +2824,43 @@ export component MainWindow inherits Window {
                                                     }
                                                 }
 
-                                                // Right: Action Buttons (Extract, Replace, Delete)
+                                                // Right: Action Buttons (Preview, Extract, Replace, Delete)
                                                 HorizontalLayout {
                                                     spacing: 3px;
                                                     alignment: end;
                                                     cross-axis-alignment: center;
+
+                                                    // Preview Button
+                                                    Rectangle {
+                                                        width: 24px;
+                                                        height: 24px;
+                                                        border-radius: 4px;
+                                                        background: prev_touch.has-hover ? Theme.bg_active : Colors.transparent;
+                                                        z: prev_touch.has-hover ? 50 : 1;
+
+                                                        prev_touch := TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => {
+                                                                root.preview_attachment_requested(att.id);
+                                                            }
+                                                        }
+
+                                                        Image {
+                                                            source: @image-url("../assets/icons/eye.svg");
+                                                            width: 13px;
+                                                            height: 13px;
+                                                            colorize: prev_touch.has-hover ? Theme.accent : Theme.text_secondary;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: (parent.height - self.height) / 2;
+                                                        }
+
+                                                        TooltipBubble {
+                                                            text: "Preview attachment";
+                                                            show: prev_touch.has-hover;
+                                                            x: (parent.width - self.width) / 2;
+                                                            y: -28px;
+                                                        }
+                                                    }
 
                                                     // Extract / Download Button
                                                     Rectangle {
@@ -2802,6 +2868,7 @@ export component MainWindow inherits Window {
                                                         height: 24px;
                                                         border-radius: 4px;
                                                         background: extract_touch.has-hover ? Theme.bg_active : Colors.transparent;
+                                                        z: extract_touch.has-hover ? 50 : 1;
 
                                                         extract_touch := TouchArea {
                                                             mouse-cursor: pointer;
@@ -2820,7 +2887,7 @@ export component MainWindow inherits Window {
                                                         }
 
                                                         TooltipBubble {
-                                                            text: "Extract / Save to disk";
+                                                            text: "Download / Save to disk";
                                                             show: extract_touch.has-hover;
                                                             x: (parent.width - self.width) / 2;
                                                             y: -28px;
@@ -2833,6 +2900,7 @@ export component MainWindow inherits Window {
                                                         height: 24px;
                                                         border-radius: 4px;
                                                         background: rep_touch.has-hover ? Theme.bg_active : Colors.transparent;
+                                                        z: rep_touch.has-hover ? 50 : 1;
 
                                                         rep_touch := TouchArea {
                                                             mouse-cursor: pointer;
@@ -2864,6 +2932,7 @@ export component MainWindow inherits Window {
                                                         height: 24px;
                                                         border-radius: 4px;
                                                         background: del_att_touch.has-hover ? Theme.danger_subtle : Colors.transparent;
+                                                        z: del_att_touch.has-hover ? 50 : 1;
 
                                                         del_att_touch := TouchArea {
                                                             mouse-cursor: pointer;
@@ -3050,6 +3119,24 @@ export component MainWindow inherits Window {
         delete => {
             root.show_delete_attachment_modal = false;
             root.delete_attachment_confirmed(root.target_attachment_id);
+        }
+    }
+
+    if root.show_attachment_preview_modal : AttachmentPreviewModal {
+        attachment_id: root.preview_attachment_id;
+        file_name: root.preview_file_name;
+        file_size_formatted: root.preview_file_size;
+        created_at_formatted: root.preview_created_at;
+        is_image: root.preview_is_image;
+        preview_image: root.preview_image;
+        is_text: root.preview_is_text;
+        preview_text: root.preview_text;
+        preview_error: root.preview_error;
+        close => {
+            root.show_attachment_preview_modal = false;
+        }
+        download(id) => {
+            root.extract_attachment_requested(id);
         }
     }
 

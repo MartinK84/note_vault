@@ -1711,3 +1711,452 @@ export component WarningModal inherits Rectangle {
     }
 }
 
+// ==========================================
+// MODAL: ATTACHMENT PREVIEW
+// ==========================================
+export component AttachmentPreviewModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.overlay;
+    z: 2000;
+    forward-focus: modal_focus;
+
+    in property <string> attachment_id: "";
+    in property <string> file_name: "";
+    in property <string> file_size_formatted: "";
+    in property <string> created_at_formatted: "";
+    in property <bool> is_image: false;
+    in property <image> preview_image;
+    in property <bool> is_text: false;
+    in property <string> preview_text: "";
+    in property <string> preview_error: "";
+
+    callback close();
+    callback download(string);
+
+    init => {
+        modal_focus.focus();
+    }
+
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+
+    modal_focus := FocusScope {
+        width: 100%;
+        height: 100%;
+
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close();
+                return accept;
+            }
+            reject
+        }
+
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close();
+                return accept;
+            }
+            reject
+        }
+
+        modal_card := Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Math.min(parent.width - 80px, 860px);
+            height: Math.min(parent.height - 80px, 640px);
+            background: Theme.bg_surface;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border_active;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000080;
+            drop-shadow-offset-y: 6px;
+            clip: true;
+
+            // Prevent clicks inside the card from closing modal and refocus modal_focus if clicked
+            TouchArea {
+                clicked => {
+                    modal_focus.focus();
+                }
+            }
+
+            VerticalLayout {
+                padding: 0px;
+                spacing: 0px;
+
+                // --- Header (Height 52px) ---
+                Rectangle {
+                    height: 52px;
+                    background: Theme.bg_surface;
+
+                    // Bottom border of header
+                    Rectangle {
+                        x: 0px;
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 16px;
+                        alignment: space-between;
+                        cross-axis-alignment: center;
+
+                        // Left: File Icon + File Name + Badges
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            cross-axis-alignment: center;
+
+                            // Icon container
+                            Rectangle {
+                                width: 32px;
+                                height: 32px;
+                                border-radius: 6px;
+                                background: Theme.bg_active;
+
+                                Image {
+                                    source: root.is_image ? @image-url("../assets/icons/eye.svg") : (root.is_text ? @image-url("../assets/icons/file-text.svg") : @image-url("../assets/icons/file.svg"));
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: Theme.accent;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+
+                            // Title & Info
+                            VerticalLayout {
+                                spacing: 2px;
+                                alignment: center;
+
+                                Text {
+                                    text: root.file_name;
+                                    font-size: 14px;
+                                    font-weight: 700;
+                                    color: Theme.text_primary;
+                                    overflow: elide;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    alignment: start;
+                                    cross-axis-alignment: center;
+
+                                    Text {
+                                        text: root.file_size_formatted;
+                                        font-size: 11px;
+                                        font-weight: 500;
+                                        color: Theme.text_secondary;
+                                    }
+
+                                    if root.created_at_formatted != "" : Text {
+                                        text: "•";
+                                        font-size: 10px;
+                                        color: Theme.text_muted;
+                                    }
+
+                                    if root.created_at_formatted != "" : Text {
+                                        text: root.created_at_formatted;
+                                        font-size: 11px;
+                                        color: Theme.text_muted;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Right: Actions (Download + Close)
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: end;
+                            cross-axis-alignment: center;
+
+                            // Download / Extract Button
+                            Rectangle {
+                                height: 28px;
+                                border-radius: 5px;
+                                background: dl_touch.has-hover ? Theme.accent_hover : Theme.accent;
+                                animate background { duration: 120ms; }
+
+                                dl_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.download(root.attachment_id);
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 12px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/download.svg");
+                                        width: 13px;
+                                        height: 13px;
+                                        colorize: Theme.accent_text;
+                                    }
+
+                                    Text {
+                                        text: "Save to Disk";
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        color: Theme.accent_text;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // Close Button
+                            ModalCloseButton {
+                                clicked => {
+                                    root.close();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Content Body ---
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.bg_main;
+
+                    // CASE 1: Image Preview
+                    if root.is_image : VerticalLayout {
+                        padding: 16px;
+
+                        Image {
+                            source: root.preview_image;
+                            image-fit: contain;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+
+                    // CASE 2: Text Preview
+                    if root.is_text : VerticalLayout {
+                        padding: 14px;
+
+                        Rectangle {
+                            background: Theme.bg_surface;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            clip: true;
+
+                            text_scroll := ScrollView {
+                                width: 100%;
+                                height: 100%;
+                                content-width: self.visible-width;
+                                content-height: max(self.visible-height, preview_txt.preferred-height + 28px);
+
+                                Rectangle {
+                                    width: text_scroll.visible-width;
+                                    height: max(text_scroll.visible-height, preview_txt.preferred-height + 28px);
+
+                                    preview_txt := TextInput {
+                                        x: 14px;
+                                        y: 14px;
+                                        width: max(100px, parent.width - 36px);
+                                        read-only: true;
+                                        single-line: false;
+                                        wrap: word-wrap;
+                                        font-family: "Consolas, 'Cascadia Code', 'Fira Code', 'Courier New', monospace";
+                                        font-size: 12px;
+                                        color: Theme.text_primary;
+                                        selection-background-color: Theme.accent;
+                                        selection-foreground-color: Theme.accent_text;
+                                        text: root.preview_text;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // CASE 3: Error
+                    if root.preview_error != "" : VerticalLayout {
+                        alignment: center;
+                        cross-axis-alignment: center;
+                        spacing: 12px;
+
+                        Image {
+                            source: @image-url("../assets/icons/alert-triangle.svg");
+                            width: 36px;
+                            height: 36px;
+                            colorize: Theme.danger;
+                        }
+
+                        Text {
+                            text: "Unable to load preview";
+                            font-size: 15px;
+                            font-weight: 600;
+                            color: Theme.text_primary;
+                        }
+
+                        Text {
+                            text: root.preview_error;
+                            font-size: 12px;
+                            color: Theme.text_secondary;
+                        }
+                    }
+
+                    // CASE 4: Other / Binary / Unsupported
+                    if !root.is_image && !root.is_text && root.preview_error == "" : VerticalLayout {
+                        alignment: center;
+                        cross-axis-alignment: center;
+                        spacing: 14px;
+                        padding: 24px;
+
+                        Rectangle {
+                            width: 64px;
+                            height: 64px;
+                            border-radius: 12px;
+                            background: Theme.bg_active;
+
+                            Image {
+                                source: @image-url("../assets/icons/file.svg");
+                                width: 32px;
+                                height: 32px;
+                                colorize: Theme.accent;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+
+                        Text {
+                            text: root.file_name;
+                            font-size: 16px;
+                            font-weight: 700;
+                            color: Theme.text_primary;
+                        }
+
+                        Text {
+                            text: root.file_size_formatted;
+                            font-size: 12px;
+                            color: Theme.text_secondary;
+                        }
+
+                        Text {
+                            text: "Direct inline preview is not supported for this file type.\nYou can save the attachment to your disk to view it with your system applications.";
+                            font-size: 12px;
+                            color: Theme.text_muted;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+
+                        Rectangle {
+                            height: 32px;
+                            border-radius: 6px;
+                            background: dl_fallback_touch.has-hover ? Theme.accent_hover : Theme.accent;
+                            animate background { duration: 120ms; }
+
+                            dl_fallback_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.download(root.attachment_id);
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 16px;
+                                spacing: 6px;
+                                alignment: center;
+                                cross-axis-alignment: center;
+
+                                Image {
+                                    source: @image-url("../assets/icons/download.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.accent_text;
+                                }
+
+                                Text {
+                                    text: "Save File to Disk";
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    color: Theme.accent_text;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Footer (Height 42px) ---
+                Rectangle {
+                    height: 42px;
+                    background: Theme.bg_surface;
+
+                    // Top border of footer
+                    Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        alignment: space-between;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: root.is_image ? "Image Preview" : (root.is_text ? "Text Preview" : "Encrypted Attachment");
+                            font-size: 11px;
+                            color: Theme.text_muted;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            height: 26px;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            background: close_btn_touch.has-hover ? Theme.hover : Colors.transparent;
+                            animate background { duration: 120ms; }
+
+                            close_btn_touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.close();
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                alignment: center;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: "Close (Esc)";
+                                    font-size: 11px;
+                                    font-weight: 500;
+                                    color: Theme.text_secondary;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+

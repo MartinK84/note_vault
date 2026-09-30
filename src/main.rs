@@ -17,6 +17,7 @@ use note_vault::{
     compact_note_attachments, delete_note_attachments, format_decrypted_json_export,
     format_decrypted_txt_export, format_file_size, format_line_numbers, format_markdown_export,
     format_unix_date, format_unix_timestamp, get_next_attachment_path, is_attachment_file,
+    is_image_filename, is_text_data, is_text_filename,
     list_note_attachment_files, load_attachment_decrypted, load_attachment_metadata,
     load_note_decrypted, move_note_attachments, parse_markdown_into_blocks, render_markdown_styled,
     sanitize_filename, save_attachment_encrypted, save_note_encrypted, validate_folder_name,
@@ -1006,6 +1007,11 @@ fn load_note_into_ui(
     session_password: &Arc<Mutex<Option<Zeroizing<String>>>>,
     session_keyfile: &Arc<Mutex<Option<Zeroizing<Vec<u8>>>>>,
 ) {
+    ui.set_show_attachment_preview_modal(false);
+    ui.set_preview_image(slint::Image::default());
+    ui.set_preview_text("".into());
+    ui.set_preview_attachment_id("".into());
+
     if note_id.is_empty() {
         ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
         ui.set_attachment_count(0);
@@ -3219,6 +3225,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_vault_status_text("Vault locked".into());
             ui.set_has_unsaved_changes(false);
             ui.set_show_unsaved_warning(false);
+            ui.set_show_attachment_preview_modal(false);
+            ui.set_preview_image(slint::Image::default());
+            ui.set_preview_text("".into());
+            ui.set_preview_attachment_id("".into());
             ui.set_is_locked(true);
         }
     });
@@ -3975,6 +3985,116 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             update_attachments_in_ui(&ui, &note_file_path, &password, kf_bytes);
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Preview Attachment Requested
+    // -------------------------------------------------------------
+    main_window.on_preview_attachment_requested({
+        let window_weak = window_weak.clone();
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+
+        move |att_path_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
+                return;
+            }
+
+            let path = PathBuf::from(att_path_str.as_str());
+            if !path.exists() {
+                eprintln!("Attachment file does not exist: {:?}", path);
+                return;
+            }
+
+            let (password_opt, keyfile_opt) = {
+                let session = session_password.lock().unwrap();
+                let keyfile = session_keyfile.lock().unwrap();
+                (session.clone(), keyfile.clone())
+            };
+            let Some(password) = password_opt else { return };
+            let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+
+            match load_attachment_decrypted(&password, kf_bytes, &path) {
+                Ok(att) => {
+                    let file_name = att.file_name.clone();
+                    let file_size_str = format_file_size(att.file_size);
+                    let date_str = format_unix_date(att.created_at);
+
+                    let ext = Path::new(&file_name)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+
+                    let is_image = is_image_filename(&file_name);
+                    let is_text = is_text_filename(&file_name) || is_text_data(&att.data);
+
+                    ui.set_preview_attachment_id(att_path_str);
+                    ui.set_preview_file_name(file_name.into());
+                    ui.set_preview_file_size(file_size_str.into());
+                    ui.set_preview_created_at(date_str.into());
+
+                    if is_image {
+                        let temp_file = std::env::temp_dir().join(format!(
+                            "nv_preview_{}.{}",
+                            Uuid::new_v4(),
+                            if ext.is_empty() { "png" } else { &ext }
+                        ));
+
+                        let load_res = fs::write(&temp_file, &att.data)
+                            .map_err(|e| e.to_string())
+                            .and_then(|_| {
+                                slint::Image::load_from_path(&temp_file)
+                                    .map_err(|e| format!("{:?}", e))
+                            });
+
+                        let _ = fs::remove_file(&temp_file);
+
+                        match load_res {
+                            Ok(img) => {
+                                ui.set_preview_is_image(true);
+                                ui.set_preview_image(img);
+                                ui.set_preview_is_text(false);
+                                ui.set_preview_text("".into());
+                                ui.set_preview_error("".into());
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to load preview image: {}", e);
+                                ui.set_preview_is_image(false);
+                                ui.set_preview_image(slint::Image::default());
+                                ui.set_preview_is_text(false);
+                                ui.set_preview_text("".into());
+                                ui.set_preview_error(format!("Could not decode image: {}", e).into());
+                            }
+                        }
+                    } else if is_text {
+                        let mut text = String::from_utf8_lossy(&att.data).to_string();
+                        const MAX_CHARS: usize = 120_000;
+                        if text.len() > MAX_CHARS {
+                            text.truncate(MAX_CHARS);
+                            text.push_str("\n\n--- [Preview truncated. File is too large to display completely. Please download to view full file.] ---");
+                        }
+                        ui.set_preview_is_image(false);
+                        ui.set_preview_image(slint::Image::default());
+                        ui.set_preview_is_text(true);
+                        ui.set_preview_text(text.into());
+                        ui.set_preview_error("".into());
+                    } else {
+                        ui.set_preview_is_image(false);
+                        ui.set_preview_image(slint::Image::default());
+                        ui.set_preview_is_text(false);
+                        ui.set_preview_text("".into());
+                        ui.set_preview_error("".into());
+                    }
+
+                    ui.set_show_attachment_preview_modal(true);
+                }
+                Err(e) => {
+                    eprintln!("Failed to decrypt attachment for preview at {:?}: {}", path, e);
+                }
+            }
         }
     });
 

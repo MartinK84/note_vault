@@ -288,6 +288,48 @@ pub fn format_file_size(bytes: u64) -> String {
     }
 }
 
+/// Returns true if the file extension or file name indicates an image format.
+pub fn is_image_filename(file_name: &str) -> bool {
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "svg"
+    )
+}
+
+/// Returns true if the file extension or file name indicates a text format.
+pub fn is_text_filename(file_name: &str) -> bool {
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "txt" | "md" | "markdown" | "json" | "csv" | "log" | "rs" | "toml"
+            | "yaml" | "yml" | "xml" | "html" | "htm" | "css" | "scss" | "js"
+            | "jsx" | "ts" | "tsx" | "py" | "sh" | "bat" | "cmd" | "ps1" | "ini"
+            | "cfg" | "conf" | "env" | "sql" | "c" | "cpp" | "h" | "hpp" | "go"
+            | "java" | "kt" | "swift" | "rb" | "php" | "lua"
+    )
+}
+
+/// Returns true if bytes appear to be UTF-8 plain text without null bytes.
+pub fn is_text_data(data: &[u8]) -> bool {
+    if data.is_empty() {
+        return true;
+    }
+    let sample = if data.len() > 8192 { &data[..8192] } else { data };
+    if sample.contains(&0) {
+        return false;
+    }
+    std::str::from_utf8(sample).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +454,27 @@ mod tests {
         assert_eq!(format_file_size(1024), "1.0 KB");
         assert_eq!(format_file_size(2048), "2.0 KB");
         assert_eq!(format_file_size(1024 * 1024 * 3 + 512 * 1024), "3.5 MB");
+    }
+
+    #[test]
+    fn test_preview_type_detection() {
+        assert!(is_image_filename("photo.PNG"));
+        assert!(is_image_filename("diagram.jpg"));
+        assert!(is_image_filename("graphic.svg"));
+        assert!(is_image_filename("icon.webp"));
+        assert!(!is_image_filename("notes.txt"));
+        assert!(!is_image_filename("archive.zip"));
+
+        assert!(is_text_filename("notes.TXT"));
+        assert!(is_text_filename("README.md"));
+        assert!(is_text_filename("config.json"));
+        assert!(is_text_filename("data.csv"));
+        assert!(is_text_filename("main.rs"));
+        assert!(!is_text_filename("photo.png"));
+        assert!(!is_text_filename("binary.bin"));
+
+        assert!(is_text_data(b"Hello world, this is UTF-8 text!"));
+        assert!(is_text_data(b""));
+        assert!(!is_text_data(&[0x00, 0x01, 0x02, 0xFF]));
     }
 }
