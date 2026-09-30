@@ -435,5 +435,42 @@ fn test_relative_vault_path_not_modified_on_config_resave() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_is_main_window_visible_logic() {
+    MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
+    assert!(is_main_window_visible());
 
+    MAIN_WINDOW_HIDDEN_TO_TRAY.store(true, Ordering::Relaxed);
+    assert!(!is_main_window_visible());
 
+    MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
+    assert!(is_main_window_visible());
+}
+
+#[test]
+fn test_minimize_main_window_callable() {
+    // Calling minimize_main_window should not panic or error
+    minimize_main_window();
+}
+
+#[test]
+fn test_handle_main_window_hotkey_toggle() {
+    if let Ok(ui) = MainWindow::new() {
+        // When visible and min_to_tray is true -> should set MAIN_WINDOW_HIDDEN_TO_TRAY to true
+        MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
+        handle_main_window_hotkey(&ui, true);
+        assert!(MAIN_WINDOW_HIDDEN_TO_TRAY.load(Ordering::Relaxed));
+        assert!(!is_main_window_visible());
+
+        // When hidden/minimized -> pressing hotkey should restore it and clear tray flag
+        handle_main_window_hotkey(&ui, true);
+        assert!(!MAIN_WINDOW_HIDDEN_TO_TRAY.load(Ordering::Relaxed));
+
+        // When visible and min_to_tray is false -> should minimize to taskbar, tray flag remains false
+        handle_main_window_hotkey(&ui, false);
+        assert!(!MAIN_WINDOW_HIDDEN_TO_TRAY.load(Ordering::Relaxed));
+
+        // Cleanup
+        MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
+    }
+}

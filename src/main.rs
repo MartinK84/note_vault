@@ -348,7 +348,6 @@ fn activate_quick_search_window() {}
 #[cfg(target_os = "windows")]
 static MAIN_WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 
-#[cfg(target_os = "windows")]
 static MAIN_WINDOW_HIDDEN_TO_TRAY: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
@@ -561,6 +560,76 @@ fn restore_main_window() {
 
 #[cfg(not(target_os = "windows"))]
 fn restore_main_window() {}
+
+/// Minimizes the main NoteVault application window to the taskbar on Windows.
+#[cfg(target_os = "windows")]
+fn minimize_main_window() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+    }
+    unsafe {
+        let hwnd = get_main_window_hwnd();
+        if hwnd != 0 {
+            const SW_MINIMIZE: i32 = 6;
+            ShowWindow(hwnd, SW_MINIMIZE);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn minimize_main_window() {}
+
+/// Returns true if the main window is currently visible on screen (not hidden to tray and not minimized).
+#[cfg(target_os = "windows")]
+fn is_main_window_visible() -> bool {
+    if MAIN_WINDOW_HIDDEN_TO_TRAY.load(Ordering::Relaxed) {
+        return false;
+    }
+    let hwnd = get_main_window_hwnd();
+    if hwnd != 0 {
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn IsIconic(hWnd: isize) -> i32;
+            fn IsWindowVisible(hWnd: isize) -> i32;
+        }
+        unsafe {
+            if IsIconic(hwnd) != 0 {
+                return false;
+            }
+            if IsWindowVisible(hwnd) == 0 {
+                return false;
+            }
+            return true;
+        }
+    }
+    !MAIN_WINDOW_HIDDEN_TO_TRAY.load(Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_main_window_visible() -> bool {
+    !MAIN_WINDOW_HIDDEN_TO_TRAY.load(Ordering::Relaxed)
+}
+
+/// Handles toggling the main window state when its global hotkey is pressed.
+/// If currently visible, it minimizes the window (to system tray if `min_to_tray` is enabled,
+/// or to taskbar if disabled). If currently minimized or hidden, it restores and shows the window.
+fn handle_main_window_hotkey(ui: &MainWindow, min_to_tray: bool) {
+    if is_main_window_visible() {
+        if min_to_tray {
+            MAIN_WINDOW_HIDDEN_TO_TRAY.store(true, Ordering::Relaxed);
+            hide_main_window();
+            let _ = ui.hide();
+        } else {
+            minimize_main_window();
+        }
+    } else {
+        let _ = ui.show();
+        #[cfg(target_os = "windows")]
+        MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
+        restore_main_window();
+    }
+}
 
 /// Restores and focuses the window of an already running instance of NoteVault on Windows.
 #[cfg(target_os = "windows")]
@@ -1514,12 +1583,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     if main_hk_id == Some(event.id) {
                         let weak = window_weak.clone();
+                        let cfg_arc = Arc::clone(&app_config);
                         slint::invoke_from_event_loop(move || {
                             if let Some(ui) = weak.upgrade() {
-                                let _ = ui.show();
-                                #[cfg(target_os = "windows")]
-                                MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
-                                restore_main_window();
+                                let min_to_tray = cfg_arc.lock().unwrap().minimize_to_tray;
+                                handle_main_window_hotkey(&ui, min_to_tray);
                             }
                         })
                         .ok();
