@@ -474,3 +474,40 @@ fn test_handle_main_window_hotkey_toggle() {
         MAIN_WINDOW_HIDDEN_TO_TRAY.store(false, Ordering::Relaxed);
     }
 }
+
+#[test]
+fn test_save_current_note_triggers_save_callback() {
+    if let Ok(ui) = MainWindow::new() {
+        let saved_called = Arc::new(AtomicBool::new(false));
+        let saved_title = Arc::new(Mutex::new(String::new()));
+        let saved_content = Arc::new(Mutex::new(String::new()));
+        let saved_category = Arc::new(Mutex::new(String::new()));
+
+        let sc = Arc::clone(&saved_called);
+        let st = Arc::clone(&saved_title);
+        let scon = Arc::clone(&saved_content);
+        let scat = Arc::clone(&saved_category);
+
+        ui.on_save_note_requested(move |title, content, category| {
+            sc.store(true, Ordering::Relaxed);
+            *st.lock().unwrap() = title.to_string();
+            *scon.lock().unwrap() = content.to_string();
+            *scat.lock().unwrap() = category.to_string();
+        });
+
+        // Set note state
+        ui.set_is_locked(false);
+        ui.set_active_note_id("note-123".into());
+        ui.set_note_title("Test Note Title".into());
+        ui.set_note_content("Test note content body".into());
+        ui.set_note_category("Work".into());
+
+        // Call the save_current_note function (which is triggered by Ctrl+S or Save button)
+        ui.invoke_save_current_note();
+
+        assert!(saved_called.load(Ordering::Relaxed), "Save note callback must be invoked");
+        assert_eq!(*saved_title.lock().unwrap(), "Test Note Title");
+        assert_eq!(*saved_content.lock().unwrap(), "Test note content body");
+        assert_eq!(*saved_category.lock().unwrap(), "Work");
+    }
+}

@@ -258,6 +258,28 @@ export component MainWindow inherits Window {
     callback note_content_edited(string);
     callback copy_text_to_clipboard(string);
 
+    public function save_current_note() {
+        if !root.is_locked && root.active_note_id != ""
+            && !root.show_settings_modal
+            && !root.show_export_modal
+            && !root.show_warning_modal
+            && !root.show_delete_folder_modal
+            && !root.show_delete_note_modal
+            && !root.show_delete_attachment_modal
+            && !root.show_folder_modal
+            && !root.show_rename_folder_modal
+            && !root.show_move_note_modal
+            && !root.show_add_tag_modal
+            && !root.show_welcome_modal
+            && !root.show_unsaved_warning {
+            root.save_note_requested(
+                root.note_title,
+                root.note_content,
+                root.note_category
+            );
+        }
+    }
+
     // Column resize callbacks & state
     in-out property <length> folder_pane_width: 210px;
     in-out property <length> notes_pane_width: 300px;
@@ -276,12 +298,40 @@ export component MainWindow inherits Window {
     // ==========================================
     // 3-PANE LAYOUT: FOLDERS | NOTES | EDITOR
     // ==========================================
-    // Outer container drives the absolute layout
-    Rectangle {
-        x: 0px;
-        y: 0px;
-        width: parent.width;
-        height: parent.height;
+    main_layout_scope := FocusScope {
+        width: 100%;
+        height: 100%;
+
+        capture-key-pressed(event) => {
+            let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
+                (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
+                || event.text == "\u{0013}"
+            );
+            if is_ctrl_s {
+                root.save_current_note();
+                return accept;
+            }
+            reject
+        }
+
+        key-pressed(event) => {
+            let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
+                (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
+                || event.text == "\u{0013}"
+            );
+            if is_ctrl_s {
+                root.save_current_note();
+                return accept;
+            }
+            reject
+        }
+
+        // Outer container drives the absolute layout
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
 
         // Computed positions (8px outer padding, 6px dragger width)
         // x1 = 8px (padding)
@@ -1294,7 +1344,37 @@ export component MainWindow inherits Window {
             border-color: Theme.border;
             clip: true;
 
-            if !root.is_locked && root.active_note_id != "" : VerticalLayout {
+            editor_scope := FocusScope {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+
+                capture-key-pressed(event) => {
+                    let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
+                        (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
+                        || event.text == "\u{0013}"
+                    );
+                    if is_ctrl_s {
+                        root.save_current_note();
+                        return accept;
+                    }
+                    reject
+                }
+
+                key-pressed(event) => {
+                    let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
+                        (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
+                        || event.text == "\u{0013}"
+                    );
+                    if is_ctrl_s {
+                        root.save_current_note();
+                        return accept;
+                    }
+                    reject
+                }
+
+                if !root.is_locked && root.active_note_id != "" : VerticalLayout {
                 x: 0px;
                 y: 0px;
                 width: parent.width;
@@ -1475,11 +1555,7 @@ export component MainWindow inherits Window {
                                 save_touch := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => {
-                                        root.save_note_requested(
-                                            root.note_title,
-                                            root.note_content,
-                                            root.note_category
-                                        );
+                                        root.save_current_note();
                                     }
                                 }
 
@@ -2899,6 +2975,8 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+    }
     }
 
     // ==========================================
