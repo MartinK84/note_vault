@@ -2,7 +2,8 @@ use std::fs;
 use note_vault::{
     get_canvas_path, is_canvas_file, load_canvas_decrypted, move_note_attachments,
     delete_note_attachments, reencrypt_vault_atomic, save_canvas_encrypted, save_note_encrypted,
-    load_note_decrypted, Note, NoteType,
+    load_note_decrypted, Note, NoteType, hsl_to_rgb, rgb_to_hsl, clamp_zoom_percent,
+    parse_zoom_input, scale_coordinate_to_canvas,
 };
 use uuid::Uuid;
 
@@ -323,4 +324,155 @@ fn test_canvas_line_styles_and_large_stroke_widths() {
         assert!(pixmap.pixel(120, 250).unwrap().blue() > 200);
     }
 }
+
+#[test]
+fn test_hsl_to_rgb_and_rgb_to_hsl_conversions() {
+    // 1. Primary Colors
+    // Red: RGB(255, 0, 0) <-> HSL(0, 100%, 50%)
+    assert_eq!(hsl_to_rgb(0.0, 100.0, 50.0), (255, 0, 0));
+    assert_eq!(rgb_to_hsl(255, 0, 0), (0.0, 100.0, 50.0));
+
+    // Green: RGB(0, 255, 0) <-> HSL(120, 100%, 50%)
+    assert_eq!(hsl_to_rgb(120.0, 100.0, 50.0), (0, 255, 0));
+    assert_eq!(rgb_to_hsl(0, 255, 0), (120.0, 100.0, 50.0));
+
+    // Blue: RGB(0, 0, 255) <-> HSL(240, 100%, 50%)
+    assert_eq!(hsl_to_rgb(240.0, 100.0, 50.0), (0, 0, 255));
+    assert_eq!(rgb_to_hsl(0, 0, 255), (240.0, 100.0, 50.0));
+
+    // 2. Secondary Colors
+    // Yellow: RGB(255, 255, 0) <-> HSL(60, 100%, 50%)
+    assert_eq!(hsl_to_rgb(60.0, 100.0, 50.0), (255, 255, 0));
+    assert_eq!(rgb_to_hsl(255, 255, 0), (60.0, 100.0, 50.0));
+
+    // Cyan: RGB(0, 255, 255) <-> HSL(180, 100%, 50%)
+    assert_eq!(hsl_to_rgb(180.0, 100.0, 50.0), (0, 255, 255));
+    assert_eq!(rgb_to_hsl(0, 255, 255), (180.0, 100.0, 50.0));
+
+    // Magenta: RGB(255, 0, 255) <-> HSL(300, 100%, 50%)
+    assert_eq!(hsl_to_rgb(300.0, 100.0, 50.0), (255, 0, 255));
+    assert_eq!(rgb_to_hsl(255, 0, 255), (300.0, 100.0, 50.0));
+
+    // 3. Neutrals
+    // Pure Black: RGB(0, 0, 0) -> HSL(0, 0%, 0%)
+    assert_eq!(hsl_to_rgb(0.0, 0.0, 0.0), (0, 0, 0));
+    assert_eq!(rgb_to_hsl(0, 0, 0), (0.0, 0.0, 0.0));
+
+    // Pure White: RGB(255, 255, 255) -> HSL(0, 0%, 100%)
+    assert_eq!(hsl_to_rgb(0.0, 0.0, 100.0), (255, 255, 255));
+    assert_eq!(rgb_to_hsl(255, 255, 255), (0.0, 0.0, 100.0));
+
+    // Neutral Gray: RGB(128, 128, 128) -> HSL(0, 0%, 50%)
+    assert_eq!(hsl_to_rgb(0.0, 0.0, 50.0), (128, 128, 128));
+    assert_eq!(rgb_to_hsl(128, 128, 128), (0.0, 0.0, 50.0));
+
+    // 4. Roundtrip consistency on sample vibrant palette colors
+    let samples = [(30u8, 30u8, 30u8), (239, 68, 68), (59, 130, 246), (168, 85, 247), (34, 197, 94)];
+    for &(r, g, b) in &samples {
+        let (h, s, l) = rgb_to_hsl(r, g, b);
+        let (r2, g2, b2) = hsl_to_rgb(h, s, l);
+        assert!((r as i32 - r2 as i32).abs() <= 1, "R mismatch for ({}, {}, {}): got {}", r, g, b, r2);
+        assert!((g as i32 - g2 as i32).abs() <= 1, "G mismatch for ({}, {}, {}): got {}", r, g, b, g2);
+        assert!((b as i32 - b2 as i32).abs() <= 1, "B mismatch for ({}, {}, {}): got {}", r, g, b, b2);
+    }
+}
+
+#[test]
+fn test_canvas_zoom_clamping_and_parsing() {
+    // 1. Zoom range clamping: min 25%, max 400%
+    assert_eq!(clamp_zoom_percent(100), 100);
+    assert_eq!(clamp_zoom_percent(25), 25);
+    assert_eq!(clamp_zoom_percent(400), 400);
+    assert_eq!(clamp_zoom_percent(10), 25);
+    assert_eq!(clamp_zoom_percent(0), 25);
+    assert_eq!(clamp_zoom_percent(-50), 25);
+    assert_eq!(clamp_zoom_percent(500), 400);
+    assert_eq!(clamp_zoom_percent(1000), 400);
+
+    // 2. Zoom input parsing with % suffix and whitespaces
+    assert_eq!(parse_zoom_input("100%"), Some(100));
+    assert_eq!(parse_zoom_input("150"), Some(150));
+    assert_eq!(parse_zoom_input("  75%  "), Some(75));
+    assert_eq!(parse_zoom_input("200 %"), Some(200));
+    assert_eq!(parse_zoom_input("10%"), Some(25)); // clamped to 25
+    assert_eq!(parse_zoom_input("600%"), Some(400)); // clamped to 400
+
+    // Invalid inputs return None
+    assert_eq!(parse_zoom_input(""), None);
+    assert_eq!(parse_zoom_input("abc"), None);
+    assert_eq!(parse_zoom_input("%%"), None);
+
+    // 3. Zoom step calculations by 25%
+    let mut zoom = 100;
+    zoom = clamp_zoom_percent(zoom + 25);
+    assert_eq!(zoom, 125);
+    zoom = clamp_zoom_percent(zoom - 50);
+    assert_eq!(zoom, 75);
+
+    // Stepping below min 25%
+    let mut min_zoom = 25;
+    min_zoom = clamp_zoom_percent(min_zoom - 25);
+    assert_eq!(min_zoom, 25);
+
+    // Stepping above max 400%
+    let mut max_zoom = 400;
+    max_zoom = clamp_zoom_percent(max_zoom + 25);
+    assert_eq!(max_zoom, 400);
+}
+
+#[test]
+fn test_canvas_coordinate_scaling_at_various_zoom_levels() {
+    // Default 100% zoom (1.0 factor)
+    assert_eq!(scale_coordinate_to_canvas(500.0, 1.0), 500.0);
+    assert_eq!(scale_coordinate_to_canvas(300.0, 1.0), 300.0);
+
+    // Zoom in 200% (2.0 factor): mouse at 1000px corresponds to 500px in the Pixmap
+    assert_eq!(scale_coordinate_to_canvas(1000.0, 2.0), 500.0);
+    assert_eq!(scale_coordinate_to_canvas(600.0, 2.0), 300.0);
+
+    // Zoom out 50% (0.5 factor): mouse at 250px corresponds to 500px in the Pixmap
+    assert_eq!(scale_coordinate_to_canvas(250.0, 0.5), 500.0);
+    assert_eq!(scale_coordinate_to_canvas(150.0, 0.5), 300.0);
+
+    // Max Zoom 400% (4.0 factor): mouse at 1600px corresponds to 400px in the Pixmap
+    assert_eq!(scale_coordinate_to_canvas(1600.0, 4.0), 400.0);
+
+    // Min Zoom 25% (0.25 factor): mouse at 400px corresponds to 1600px in the Pixmap
+    assert_eq!(scale_coordinate_to_canvas(400.0, 0.25), 1600.0);
+}
+
+#[test]
+fn test_canvas_background_color_persistence_roundtrip() {
+    let temp_dir = std::env::temp_dir().join(format!("note_vault_canvas_bg_{}", Uuid::new_v4()));
+    let category_dir = temp_dir.join("Designs");
+    fs::create_dir_all(&category_dir).unwrap();
+
+    let password = "CanvasBgPassword#2026";
+    let keyfile_bytes = b"canvas_bg_keyfile_bytes";
+
+    // 1. Create a canvas note with a custom background color stored in content
+    let custom_bg_hex = "#2d3748";
+    let canvas_note = Note::new_with_type(
+        "Dark Mode Wireframe",
+        vec!["ui".into(), "dark".into()],
+        custom_bg_hex,
+        NoteType::Canvas,
+    );
+    let note_path = category_dir.join(format!("{}.vault", canvas_note.id));
+
+    save_note_encrypted(&canvas_note, password, Some(keyfile_bytes), &note_path)
+        .expect("Saving canvas note with custom background color must succeed");
+
+    // 2. Decrypt and load note
+    let loaded = load_note_decrypted(password, Some(keyfile_bytes), &note_path)
+        .expect("Loading encrypted canvas note must succeed");
+
+    assert_eq!(loaded.note_type, NoteType::Canvas);
+    assert_eq!(loaded.content, "#2d3748");
+    assert_eq!(loaded.title, "Dark Mode Wireframe");
+
+    // Clean up
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
 

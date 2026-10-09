@@ -228,11 +228,33 @@ export component MainWindow inherits Window {
     in-out property <color> canvas_color: #1e1e1e;
     in-out property <float> canvas_stroke_width: 3.0;
     in-out property <string> canvas_line_style: "solid"; // "solid" | "dashed" | "dotted"
+    in-out property <length> canvas_pan_x: 0px;
+    in-out property <length> canvas_pan_y: 0px;
+    in-out property <length> pan_start_x: 0px;
+    in-out property <length> pan_start_y: 0px;
+    in-out property <bool> is_panning: false;
+    in-out property <bool> is_drawing: false;
+    in-out property <color> canvas_bg_color: Theme.is_dark ? #18181b : #ffffff;
+    in-out property <string> canvas_bg_color_hex: Theme.is_dark ? "#18181b" : "#ffffff";
+    in-out property <string> custom_color_target: "stroke"; // "stroke" | "background"
     in-out property <bool> show_new_note_modal: false;
     in-out property <bool> show_clear_canvas_modal: false;
     in-out property <bool> show_custom_color_modal: false;
     in-out property <string> custom_color_hex: "#1e1e1e";
     in-out property <color> custom_color_preview: #1e1e1e;
+    in-out property <float> custom_color_hue: 0.0;
+    in-out property <float> custom_color_sat: 0.0;
+    in-out property <float> custom_color_light: 12.0;
+    in-out property <int> canvas_zoom_percent: 100;
+    in-out property <float> canvas_zoom: root.canvas_zoom_percent / 100.0;
+    in-out property <string> canvas_zoom_text: "100%";
+
+    public function step_zoom(delta: int) {
+        let raw = root.canvas_zoom_percent + delta;
+        let clamped = raw < 25 ? 25 : (raw > 400 ? 400 : raw);
+        root.canvas_zoom_percent = clamped;
+        root.canvas_zoom_text = @tr("{0}%", clamped);
+    }
 
     // Canvas Callbacks
     callback canvas_pointer_down(float, float);
@@ -240,11 +262,14 @@ export component MainWindow inherits Window {
     callback canvas_pointer_up(float, float);
     callback canvas_tool_changed(string);
     callback canvas_color_changed(string);
+    callback canvas_bg_color_changed(string);
     callback canvas_stroke_width_changed(float);
     callback canvas_line_style_changed(string);
     callback canvas_clear_requested();
     callback new_note_type_selected(string);
     callback custom_color_preview_requested(string);
+    callback custom_color_hsl_changed(float, float, float);
+    callback canvas_zoom_submitted(string);
 
     // --- Callbacks for Rust Backend ---
     callback unlock_requested(string);
@@ -1280,7 +1305,7 @@ export component MainWindow inherits Window {
                                     cross-axis-alignment: center;
 
                                     if note.note_type == "canvas" || note.note_type == "Canvas" : Image {
-                                        source: @image-url("../assets/icons/edit.svg");
+                                        source: @image-url("../assets/icons/brush.svg");
                                         width: 12px;
                                         height: 12px;
                                         colorize: root.active_note_id == note.id ? Theme.accent : Theme.text_secondary;
@@ -1510,7 +1535,7 @@ export component MainWindow inherits Window {
                                     cross-axis-alignment: center;
 
                                     Image {
-                                        source: @image-url("../assets/icons/edit.svg");
+                                        source: @image-url("../assets/icons/brush.svg");
                                         width: 11px;
                                         height: 11px;
                                         colorize: Theme.accent;
@@ -2162,7 +2187,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 Image {
-                                    source: @image-url("../assets/icons/edit.svg");
+                                    source: @image-url("../assets/icons/brush.svg");
                                     width: 14px;
                                     height: 14px;
                                     colorize: root.canvas_tool == "pen" ? Theme.accent : Theme.text_secondary;
@@ -2171,7 +2196,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 TooltipBubble {
-                                    text: "Pen Tool";
+                                    text: "Brush Tool (Left-Click to draw)";
                                     show: pen_touch.has-hover;
                                     x: (parent.width - self.width) / 2;
                                     y: parent.height + 4px;
@@ -2206,7 +2231,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 TooltipBubble {
-                                    text: "Eraser Tool";
+                                    text: "Eraser Tool (Right-Click to erase)";
                                     show: eraser_touch.has-hover;
                                     x: (parent.width - self.width) / 2;
                                     y: parent.height + 4px;
@@ -2357,6 +2382,8 @@ export component MainWindow inherits Window {
                                     custom_c_touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => {
+                                            root.custom_color_target = "stroke";
+                                            root.custom_color_preview_requested(root.custom_color_hex);
                                             root.show_custom_color_modal = true;
                                         }
                                     }
@@ -2371,8 +2398,54 @@ export component MainWindow inherits Window {
                                     }
 
                                     TooltipBubble {
-                                        text: "Custom Color...";
+                                        text: "Custom Stroke Color...";
                                         show: custom_c_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+                            }
+
+                            // Separator
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Theme.border;
+                            }
+
+                            // Canvas Background Color Button
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: "BG:";
+                                    font-size: 11px;
+                                    color: Theme.text_secondary;
+                                    vertical-alignment: center;
+                                }
+
+                                canvas_bg_btn := Rectangle {
+                                    width: 20px;
+                                    height: 20px;
+                                    border-radius: 4px;
+                                    background: root.canvas_bg_color;
+                                    border-width: 1.5px;
+                                    border-color: canvas_bg_touch.has-hover ? Theme.accent : Theme.border;
+
+                                    canvas_bg_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.custom_color_target = "background";
+                                            root.custom_color_preview_requested(root.canvas_bg_color_hex);
+                                            root.show_custom_color_modal = true;
+                                        }
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Canvas Background Color...";
+                                        show: canvas_bg_touch.has-hover;
                                         x: (parent.width - self.width) / 2;
                                         y: parent.height + 4px;
                                     }
@@ -2689,7 +2762,145 @@ export component MainWindow inherits Window {
                                 background: Theme.border;
                             }
 
-                            // 6. Clear Canvas Button
+                            // 6. Zoom controls
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: "Zoom:";
+                                    font-size: 11px;
+                                    color: Theme.text_secondary;
+                                    vertical-alignment: center;
+                                }
+
+                                // Zoom Out button (-25%)
+                                zoom_out_btn := Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_zoom_percent <= 25 ? Theme.bg_secondary : (zoom_out_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+
+                                    zoom_out_touch := TouchArea {
+                                        mouse-cursor: root.canvas_zoom_percent <= 25 ? default : pointer;
+                                        clicked => {
+                                            root.step_zoom(-25);
+                                        }
+                                    }
+
+                                    Image {
+                                        source: @image-url("../assets/icons/minus.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: root.canvas_zoom_percent <= 25 ? Theme.text_muted : Theme.text_primary;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Zoom out 25% (Ctrl + Scroll Down)";
+                                        show: zoom_out_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+
+                                // Zoom Edit Box
+                                zoom_edit := LineEdit {
+                                    width: 48px;
+                                    height: 22px;
+                                    font-size: 11px;
+                                    text <=> root.canvas_zoom_text;
+                                    accepted => {
+                                        root.canvas_zoom_submitted(self.text);
+                                    }
+                                }
+
+                                // Zoom In button (+25%)
+                                zoom_in_btn := Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_zoom_percent >= 400 ? Theme.bg_secondary : (zoom_in_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+
+                                    zoom_in_touch := TouchArea {
+                                        mouse-cursor: root.canvas_zoom_percent >= 400 ? default : pointer;
+                                        clicked => {
+                                            root.step_zoom(25);
+                                        }
+                                    }
+
+                                    Image {
+                                        source: @image-url("../assets/icons/plus.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: root.canvas_zoom_percent >= 400 ? Theme.text_muted : Theme.text_primary;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Zoom in 25% (Ctrl + Scroll Up)";
+                                        show: zoom_in_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+
+                                // Reset to 100% quick chip if not 100% or panned
+                                if root.canvas_zoom_percent != 100 || root.canvas_pan_x != 0px || root.canvas_pan_y != 0px : Rectangle {
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: zoom_reset_touch.has-hover ? Theme.hover : Colors.transparent;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+
+                                    zoom_reset_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_zoom_percent = 100;
+                                            root.canvas_zoom_text = "100%";
+                                            root.canvas_pan_x = 0px;
+                                            root.canvas_pan_y = 0px;
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        padding-left: 5px;
+                                        padding-right: 5px;
+                                        alignment: center;
+                                        cross-axis-alignment: center;
+
+                                        Text {
+                                            text: root.canvas_zoom_percent != 100 ? "100%" : "Center";
+                                            font-size: 10px;
+                                            color: Theme.accent;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Reset zoom to 100% and center canvas";
+                                        show: zoom_reset_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+                            }
+
+                            // Separator
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Theme.border;
+                            }
+
+                            // 7. Clear Canvas Button
                             clear_canvas_btn := Rectangle {
                                 height: 24px;
                                 border-radius: 4px;
@@ -2743,54 +2954,152 @@ export component MainWindow inherits Window {
                         vertical-stretch: (root.active_note_type == "canvas" || root.active_note_type == "Canvas") ? 1 : 0;
                         visible: (root.active_note_type == "canvas" || root.active_note_type == "Canvas");
                         background: Theme.bg_main;
+                        clip: true;
 
-                        ScrollView {
+                        // Canvas Element
+                        Rectangle {
+                            x: (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                            y: (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                            width: 1600px * root.canvas_zoom;
+                            height: 1200px * root.canvas_zoom;
+                            background: root.canvas_bg_color;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            clip: true;
+
+                            Image {
+                                width: 100%;
+                                height: 100%;
+                                source: root.canvas_image;
+                            }
+                        }
+
+                        // Full viewport TouchArea for drawing, panning, and zooming
+                        viewport_touch := TouchArea {
                             width: 100%;
                             height: 100%;
+                            mouse-cursor: root.is_panning ? grabbing : (root.canvas_tool == "eraser" ? crosshair : default);
 
-                            VerticalLayout {
-                                padding: 16px;
-                                alignment: center;
+                            pointer-event(ev) => {
+                                if ev.kind == PointerEventKind.down {
+                                    if !editor_scope.has-focus {
+                                        editor_scope.focus();
+                                    }
 
-                                HorizontalLayout {
-                                    alignment: center;
-
-                                    Rectangle {
-                                        width: 1600px;
-                                        height: 1200px;
-                                        background: Theme.is_dark ? #18181b : #ffffff;
-                                        border-radius: 6px;
-                                        border-width: 1px;
-                                        border-color: Theme.border;
-                                        clip: true;
-
-                                        Image {
-                                            width: 100%;
-                                            height: 100%;
-                                            source: root.canvas_image;
+                                    if ev.button == PointerEventButton.middle {
+                                        // End any active drawing cleanly without drawing anything on middle click
+                                        if root.is_drawing {
+                                            root.is_drawing = false;
+                                            let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                                            let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                                            let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
+                                            let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                            root.canvas_pointer_up(cx, cy);
                                         }
-
-                                        canvas_touch := TouchArea {
-                                            width: 100%;
-                                            height: 100%;
-                                            mouse-cursor: root.canvas_tool == "eraser" ? crosshair : default;
-
-                                            pointer-event(ev) => {
-                                                if ev.kind == PointerEventKind.down {
-                                                    root.canvas_pointer_down(self.mouse-x / 1px, self.mouse-y / 1px);
-                                                } else if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel {
-                                                    root.canvas_pointer_up(self.mouse-x / 1px, self.mouse-y / 1px);
-                                                }
-                                            }
-
-                                            moved => {
-                                                if self.pressed {
-                                                    root.canvas_pointer_move(self.mouse-x / 1px, self.mouse-y / 1px);
-                                                }
-                                            }
+                                        root.is_panning = true;
+                                        root.pan_start_x = self.mouse-x;
+                                        root.pan_start_y = self.mouse-y;
+                                    } else if ev.button == PointerEventButton.left {
+                                        // Left click: auto select Pen and start drawing
+                                        if root.is_drawing {
+                                            root.is_drawing = false;
+                                            let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                                            let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                                            let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
+                                            let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                            root.canvas_pointer_up(cx, cy);
+                                        }
+                                        root.is_panning = false;
+                                        if root.canvas_tool != "pen" {
+                                            root.canvas_tool = "pen";
+                                            root.canvas_tool_changed("pen");
+                                        }
+                                        let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                                        let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                                        let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
+                                        let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                        if cx >= 0.0 && cx <= 1600.0 && cy >= 0.0 && cy <= 1200.0 {
+                                            root.is_drawing = true;
+                                            root.canvas_pointer_down(cx, cy);
+                                        }
+                                    } else if ev.button == PointerEventButton.right {
+                                        // Right click: auto select Eraser and start erasing
+                                        if root.is_drawing {
+                                            root.is_drawing = false;
+                                            let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                                            let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                                            let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
+                                            let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                            root.canvas_pointer_up(cx, cy);
+                                        }
+                                        root.is_panning = false;
+                                        if root.canvas_tool != "eraser" {
+                                            root.canvas_tool = "eraser";
+                                            root.canvas_tool_changed("eraser");
+                                        }
+                                        let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                                        let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                                        let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
+                                        let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                        if cx >= 0.0 && cx <= 1600.0 && cy >= 0.0 && cy <= 1200.0 {
+                                            root.is_drawing = true;
+                                            root.canvas_pointer_down(cx, cy);
                                         }
                                     }
+                                } else if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel {
+                                    if root.is_panning {
+                                        root.is_panning = false;
+                                    }
+                                    if root.is_drawing {
+                                        root.is_drawing = false;
+                                        let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                                        let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                                        let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
+                                        let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                        root.canvas_pointer_up(cx, cy);
+                                    }
                                 }
+                            }
+
+                            moved => {
+                                if !editor_scope.has-focus {
+                                    editor_scope.focus();
+                                }
+                                if root.is_panning {
+                                    let dx = self.mouse-x - root.pan_start_x;
+                                    let dy = self.mouse-y - root.pan_start_y;
+                                    root.canvas_pan_x += dx;
+                                    root.canvas_pan_y += dy;
+                                    root.pan_start_x = self.mouse-x;
+                                    root.pan_start_y = self.mouse-y;
+                                } else if root.is_drawing {
+                                    let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
+                                    let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
+                                    let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
+                                    let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                    root.canvas_pointer_move(cx, cy);
+                                }
+                            }
+
+                            scroll-event(ev) => {
+                                if !editor_scope.has-focus {
+                                    editor_scope.focus();
+                                }
+                                if ev.modifiers.control {
+                                    if ev.delta-y > 0px {
+                                        root.step_zoom(25);
+                                        return EventResult.accept;
+                                    } else if ev.delta-y < 0px {
+                                        root.step_zoom(-25);
+                                        return EventResult.accept;
+                                    }
+                                } else {
+                                    root.canvas_pan_y += ev.delta-y;
+                                    root.canvas_pan_x += ev.delta-x;
+                                    return EventResult.accept;
+                                }
+                                return EventResult.reject;
                             }
                         }
                     }
@@ -4023,14 +4332,28 @@ export component MainWindow inherits Window {
     }
 
     if root.show_custom_color_modal : CustomColorModal {
+        modal_title: root.custom_color_target == "background" ? "Canvas Background Color" : "Custom Drawing Color";
         hex_code <=> root.custom_color_hex;
         preview_color <=> root.custom_color_preview;
+        hue_value <=> root.custom_color_hue;
+        sat_value <=> root.custom_color_sat;
+        light_value <=> root.custom_color_light;
         hex_changed(hex) => {
             root.custom_color_preview_requested(hex);
         }
+        hsl_changed(h, s, l) => {
+            root.custom_color_hsl_changed(h, s, l);
+        }
         apply_color(hex) => {
             root.show_custom_color_modal = false;
-            root.canvas_color_changed(hex);
+            if root.custom_color_target == "background" {
+                root.canvas_bg_color = root.custom_color_preview;
+                root.canvas_bg_color_hex = hex;
+                root.canvas_bg_color_changed(hex);
+            } else {
+                root.canvas_color = root.custom_color_preview;
+                root.canvas_color_changed(hex);
+            }
         }
         close => {
             root.show_custom_color_modal = false;

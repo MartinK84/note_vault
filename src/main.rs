@@ -20,10 +20,10 @@ use note_vault::{
     is_attachment_file, is_canvas_file, is_image_filename, is_text_data, is_text_filename,
     list_note_attachment_files, load_attachment_decrypted, load_attachment_metadata,
     load_canvas_decrypted, load_note_decrypted, move_note_attachments, parse_markdown_into_blocks,
-    render_markdown_styled, sanitize_filename, save_attachment_encrypted, save_canvas_encrypted,
-    save_note_encrypted, validate_folder_name, AttachmentItem, MainWindow, Note, NoteAttachment,
-    NoteMetadata, NoteType, QuickSearchResult, QuickSearchWindow, TagSuggestion, Theme,
-    UnlockWindow,
+    parse_zoom_input, render_markdown_styled, sanitize_filename, save_attachment_encrypted,
+    save_canvas_encrypted, save_note_encrypted, validate_folder_name, AttachmentItem, MainWindow,
+    Note, NoteAttachment, NoteMetadata, NoteType, QuickSearchResult, QuickSearchWindow, TagSuggestion,
+    Theme, UnlockWindow, hsl_to_rgb, rgb_to_hsl,
 };
 use rayon::prelude::*;
 use slint::{ComponentHandle, Model};
@@ -1223,6 +1223,36 @@ fn load_note_into_ui(
             });
             let img = pixmap_to_slint_image(&pixmap);
             ui.set_canvas_image(img);
+            ui.set_canvas_zoom_percent(100);
+            ui.set_canvas_zoom_text("100%".into());
+            ui.set_canvas_pan_x(0.0);
+            ui.set_canvas_pan_y(0.0);
+
+            // Restore canvas background color if stored in note.content
+            let mut bg_loaded = false;
+            if let Some(password) = password_opt.as_ref() {
+                let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+                if let Ok(note) = load_note_decrypted(password, kf_bytes, &meta.file_path) {
+                    let content_trimmed = note.content.trim();
+                    if let Some((r, g, b)) = parse_hex_rgb(content_trimmed) {
+                        ui.set_canvas_bg_color_hex(content_trimmed.into());
+                        ui.set_canvas_bg_color(slint::Color::from_argb_u8(255, r, g, b));
+                        bg_loaded = true;
+                    }
+                }
+            }
+
+            if !bg_loaded {
+                let is_dark = ui.global::<Theme>().get_is_dark();
+                let default_hex = if is_dark { "#18181b" } else { "#ffffff" };
+                let default_color = if is_dark {
+                    slint::Color::from_argb_u8(255, 24, 24, 27)
+                } else {
+                    slint::Color::from_argb_u8(255, 255, 255, 255)
+                };
+                ui.set_canvas_bg_color_hex(default_hex.into());
+                ui.set_canvas_bg_color(default_color);
+            }
 
             ui.set_canvas_tool("pen".into());
             let c = ui.get_canvas_color();
@@ -1620,6 +1650,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_active_note_type("text".into());
     main_window.set_canvas_tool("pen".into());
     main_window.set_canvas_stroke_width(3.0);
+    main_window.set_canvas_zoom_percent(100);
+    main_window.set_canvas_zoom_text("100%".into());
+    main_window.set_canvas_pan_x(0.0);
+    main_window.set_canvas_pan_y(0.0);
+    let initial_bg_hex = if is_dark { "#18181b" } else { "#ffffff" };
+    let initial_bg_color = if is_dark {
+        slint::Color::from_argb_u8(255, 24, 24, 27)
+    } else {
+        slint::Color::from_argb_u8(255, 255, 255, 255)
+    };
+    main_window.set_canvas_bg_color_hex(initial_bg_hex.into());
+    main_window.set_canvas_bg_color(initial_bg_color);
 
     // Initialize column widths from config
     main_window.set_folder_pane_width(config.folder_pane_width as f32);
@@ -3570,11 +3612,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let _ = std::fs::create_dir_all(&category_dir);
 
+            let note_content_to_save = if note_type == NoteType::Canvas {
+                ui.get_canvas_bg_color_hex().to_string()
+            } else {
+                content.to_string()
+            };
+
             let (mut note, target_path, old_path_to_remove) = if is_new {
                 let new_note = Note::new_with_type(
                     title_str.clone(),
                     parsed_tags.clone(),
-                    content.to_string(),
+                    note_content_to_save,
                     note_type,
                 );
 
@@ -3610,7 +3658,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(mut existing) => {
                         existing.title = title_str.clone();
                         existing.tags = parsed_tags.clone();
-                        existing.content = content.to_string();
+                        existing.content = note_content_to_save;
                         existing.updated_at = now;
                         existing.note_type = note_type;
                         existing
@@ -3622,7 +3670,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             id: parsed_uuid,
                             title: title_str.clone(),
                             tags: parsed_tags.clone(),
-                            content: content.to_string(),
+                            content: note_content_to_save,
                             created_at: now,
                             updated_at: now,
                             note_type,
@@ -3756,6 +3804,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_note_content("".into());
                 ui.set_editor_markdown_mode(false);
                 ui.set_canvas_tool("pen".into());
+                ui.set_canvas_zoom_percent(100);
+                ui.set_canvas_zoom_text("100%".into());
+                ui.set_canvas_pan_x(0.0);
+                ui.set_canvas_pan_y(0.0);
+                let is_dark = ui.global::<Theme>().get_is_dark();
+                let default_hex = if is_dark { "#18181b" } else { "#ffffff" };
+                let default_color = if is_dark {
+                    slint::Color::from_argb_u8(255, 24, 24, 27)
+                } else {
+                    slint::Color::from_argb_u8(255, 255, 255, 255)
+                };
+                ui.set_canvas_bg_color_hex(default_hex.into());
+                ui.set_canvas_bg_color(default_color);
 
                 let mut pixmap = tiny_skia::Pixmap::new(1600, 1200).expect("failed to allocate canvas pixmap");
                 pixmap.fill(tiny_skia::Color::TRANSPARENT);
@@ -3875,10 +3936,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ui.set_canvas_color(slint::Color::from_argb_u8(255, r, g, b));
                     ui.set_custom_color_preview(slint::Color::from_argb_u8(255, r, g, b));
                     ui.set_custom_color_hex(color_hex.clone());
+                    let (h, s, l) = rgb_to_hsl(r, g, b);
+                    ui.set_custom_color_hue(h);
+                    ui.set_custom_color_sat(s);
+                    ui.set_custom_color_light(l);
                 }
             }
             let mut cstate = canvas_state.lock().unwrap();
             cstate.color = parse_hex_color(color_str);
+        }
+    });
+
+    main_window.on_canvas_bg_color_changed({
+        let window_weak = window_weak.clone();
+
+        move |_hex| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            ui.set_has_unsaved_changes(true);
+            ui.set_vault_status_text("Canvas background changed (unsaved)".into());
         }
     });
 
@@ -3908,7 +3983,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(ui) = window_weak.upgrade() {
                 if let Some((r, g, b)) = parse_hex_rgb(hex.as_str()) {
                     ui.set_custom_color_preview(slint::Color::from_argb_u8(255, r, g, b));
+                    let (h, s, l) = rgb_to_hsl(r, g, b);
+                    ui.set_custom_color_hue(h);
+                    ui.set_custom_color_sat(s);
+                    ui.set_custom_color_light(l);
                 }
+            }
+        }
+    });
+
+    main_window.on_custom_color_hsl_changed({
+        let window_weak = window_weak.clone();
+
+        move |h, s, l| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let (r, g, b) = hsl_to_rgb(h, s, l);
+            let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
+            ui.set_custom_color_hex(hex.into());
+            ui.set_custom_color_preview(slint::Color::from_argb_u8(255, r, g, b));
+            ui.set_custom_color_hue(h);
+            ui.set_custom_color_sat(s);
+            ui.set_custom_color_light(l);
+        }
+    });
+
+    main_window.on_canvas_zoom_submitted({
+        let window_weak = window_weak.clone();
+
+        move |zoom_text| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if let Some(clamped) = parse_zoom_input(&zoom_text) {
+                ui.set_canvas_zoom_percent(clamped);
+                ui.set_canvas_zoom_text(format!("{}%", clamped).into());
+            } else {
+                let cur = ui.get_canvas_zoom_percent();
+                ui.set_canvas_zoom_text(format!("{}%", cur).into());
             }
         }
     });

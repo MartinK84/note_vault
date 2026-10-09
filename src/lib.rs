@@ -505,6 +505,85 @@ pub fn load_note_decrypted(
     Ok(note)
 }
 
+/// Converts HSL (h in 0..360, s in 0..100, l in 0..100) to RGB bytes.
+pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let s = (s / 100.0).clamp(0.0, 1.0);
+    let l = (l / 100.0).clamp(0.0, 1.0);
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_prime = (h % 360.0 + 360.0) % 360.0 / 60.0;
+    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = if h_prime < 1.0 {
+        (c, x, 0.0)
+    } else if h_prime < 2.0 {
+        (x, c, 0.0)
+    } else if h_prime < 3.0 {
+        (0.0, c, x)
+    } else if h_prime < 4.0 {
+        (0.0, x, c)
+    } else if h_prime < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    let m = l - c / 2.0;
+    let r = ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    let g = ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    let b = ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (r, g, b)
+}
+
+/// Converts RGB bytes to HSL (h in 0..360, s in 0..100, l in 0..100).
+pub fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    let l = (max + min) / 2.0;
+
+    if delta.abs() < 1e-5 {
+        return (0.0, 0.0, (l * 100.0).round());
+    }
+
+    let s = if l > 0.5 {
+        delta / (2.0 - max - min)
+    } else {
+        delta / (max + min)
+    };
+
+    let mut h = if (max - r).abs() < 1e-5 {
+        (g - b) / delta + (if g < b { 6.0 } else { 0.0 })
+    } else if (max - g).abs() < 1e-5 {
+        (b - r) / delta + 2.0
+    } else {
+        (r - g) / delta + 4.0
+    };
+    h *= 60.0;
+
+    (h.round(), (s * 100.0).round(), (l * 100.0).round())
+}
+
+/// Clamps zoom percentage to the allowed range [25, 400].
+pub fn clamp_zoom_percent(percent: i32) -> i32 {
+    percent.clamp(25, 400)
+}
+
+/// Parses a zoom percentage input string (e.g. "150%", "150", " 25% ").
+pub fn parse_zoom_input(text: &str) -> Option<i32> {
+    let cleaned = text.trim().trim_end_matches('%').trim();
+    cleaned.parse::<i32>().ok().map(clamp_zoom_percent)
+}
+
+/// Converts on-screen mouse coordinates to pixmap coordinates given a zoom factor.
+pub fn scale_coordinate_to_canvas(coord: f32, zoom: f32) -> f32 {
+    if zoom <= 0.0 {
+        coord
+    } else {
+        coord / zoom
+    }
+}
+
 /// Atomically re-encrypts all `.vault` files found recursively within `vault_dir`.
 ///
 /// 1. Finds all files with `.vault` extension (excluding `.vault.new` and temporary files).

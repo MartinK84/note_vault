@@ -1,4 +1,4 @@
-import { Button, LineEdit, ProgressIndicator, ComboBox, Palette, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, ProgressIndicator, ComboBox, Palette, ScrollView, Slider } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 component ModalCloseButton inherits Rectangle {
@@ -2335,7 +2335,7 @@ export component NewNoteModal inherits Rectangle {
                             border-color: Theme.border;
 
                             Image {
-                                source: @image-url("../assets/icons/edit.svg");
+                                source: @image-url("../assets/icons/brush.svg");
                                 width: 20px;
                                 height: 20px;
                                 colorize: Theme.accent;
@@ -2560,17 +2560,22 @@ export component CustomColorModal inherits Rectangle {
 
     in-out property <string> hex_code: "#1e1e1e";
     in-out property <color> preview_color: #1e1e1e;
+    in-out property <float> hue_value: 0.0;
+    in-out property <float> sat_value: 0.0;
+    in-out property <float> light_value: 12.0;
+    in property <string> modal_title: "Custom Drawing Color";
 
     callback apply_color(string);
     callback close();
     callback hex_changed(string);
+    callback hsl_changed(float, float, float);
 
     TouchArea {}
 
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 440px;
+        width: 580px;
         height: color_content.preferred-height;
         background: Theme.bg_surface;
         border-radius: 12px;
@@ -2604,7 +2609,7 @@ export component CustomColorModal inherits Rectangle {
                     }
 
                     Text {
-                        text: "Custom Drawing Color";
+                        text: root.modal_title;
                         font-size: 17px;
                         font-weight: 700;
                         color: Theme.text_primary;
@@ -2620,201 +2625,336 @@ export component CustomColorModal inherits Rectangle {
             }
 
             Text {
-                text: "Select a color preset or type any custom HEX color code:";
+                text: root.modal_title == "Canvas Background Color" ? "Select a preset or adjust Hue, Saturation, and Lightness for the canvas background:" : "Select a color preset or adjust Hue, Saturation, and Lightness sliders:";
                 font-size: 12px;
                 color: Theme.text_secondary;
             }
 
-            // Swatches Palette: 4 rows of 6 colors
-            VerticalLayout {
-                spacing: 7px;
+            // Side-by-side: Swatches on left, HSL sliders on right
+            HorizontalLayout {
+                spacing: 18px;
+                alignment: stretch;
+                cross-axis-alignment: start;
 
-                // Row 1: Grayscale & Neutrals
-                HorizontalLayout {
+                // Left: Swatches Palette (4 rows of 6 colors)
+                VerticalLayout {
+                    width: 216px;
                     spacing: 8px;
-                    alignment: center;
 
-                    // Black
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 6px;
-                        background: #000000;
-                        border-width: root.hex_code == "#000000" ? 2px : 1px;
-                        border-color: root.hex_code == "#000000" ? Theme.accent : #444444;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#000000"; root.preview_color = #000000; root.hex_changed("#000000"); } }
+                    Text {
+                        text: "Presets";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: Theme.text_secondary;
                     }
-                    // Charcoal
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 6px;
-                        background: #1e1e1e;
-                        border-width: root.hex_code == "#1e1e1e" ? 2px : 1px;
-                        border-color: root.hex_code == "#1e1e1e" ? Theme.accent : #444444;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#1e1e1e"; root.preview_color = #1e1e1e; root.hex_changed("#1e1e1e"); } }
-                    }
-                    // Dark Gray
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 6px;
-                        background: #475569;
-                        border-width: root.hex_code == "#475569" ? 2px : 1px;
-                        border-color: root.hex_code == "#475569" ? Theme.accent : #334155;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#475569"; root.preview_color = #475569; root.hex_changed("#475569"); } }
-                    }
-                    // Slate
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 6px;
-                        background: #94a3b8;
-                        border-width: root.hex_code == "#94a3b8" ? 2px : 1px;
-                        border-color: root.hex_code == "#94a3b8" ? Theme.accent : #64748b;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#94a3b8"; root.preview_color = #94a3b8; root.hex_changed("#94a3b8"); } }
-                    }
-                    // Light Gray
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 6px;
-                        background: #cbd5e1;
-                        border-width: root.hex_code == "#cbd5e1" ? 2px : 1px;
-                        border-color: root.hex_code == "#cbd5e1" ? Theme.accent : #94a3b8;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#cbd5e1"; root.preview_color = #cbd5e1; root.hex_changed("#cbd5e1"); } }
-                    }
-                    // White
-                    Rectangle {
-                        width: 28px;
-                        height: 28px;
-                        border-radius: 6px;
-                        background: #ffffff;
-                        border-width: root.hex_code == "#ffffff" ? 2px : 1px;
-                        border-color: root.hex_code == "#ffffff" ? Theme.accent : #cccccc;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#ffffff"; root.preview_color = #ffffff; root.hex_changed("#ffffff"); } }
+
+                    VerticalLayout {
+                        spacing: 7px;
+
+                        // Row 1: Grayscale & Neutrals
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            // Black
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: #000000;
+                                border-width: root.hex_code == "#000000" ? 2px : 1px;
+                                border-color: root.hex_code == "#000000" ? Theme.accent : #444444;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#000000"; root.preview_color = #000000; root.hex_changed("#000000"); } }
+                            }
+                            // Charcoal
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: #1e1e1e;
+                                border-width: root.hex_code == "#1e1e1e" ? 2px : 1px;
+                                border-color: root.hex_code == "#1e1e1e" ? Theme.accent : #444444;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#1e1e1e"; root.preview_color = #1e1e1e; root.hex_changed("#1e1e1e"); } }
+                            }
+                            // Dark Gray
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: #475569;
+                                border-width: root.hex_code == "#475569" ? 2px : 1px;
+                                border-color: root.hex_code == "#475569" ? Theme.accent : #334155;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#475569"; root.preview_color = #475569; root.hex_changed("#475569"); } }
+                            }
+                            // Slate
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: #94a3b8;
+                                border-width: root.hex_code == "#94a3b8" ? 2px : 1px;
+                                border-color: root.hex_code == "#94a3b8" ? Theme.accent : #64748b;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#94a3b8"; root.preview_color = #94a3b8; root.hex_changed("#94a3b8"); } }
+                            }
+                            // Light Gray
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: #cbd5e1;
+                                border-width: root.hex_code == "#cbd5e1" ? 2px : 1px;
+                                border-color: root.hex_code == "#cbd5e1" ? Theme.accent : #94a3b8;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#cbd5e1"; root.preview_color = #cbd5e1; root.hex_changed("#cbd5e1"); } }
+                            }
+                            // White
+                            Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 6px;
+                                background: #ffffff;
+                                border-width: root.hex_code == "#ffffff" ? 2px : 1px;
+                                border-color: root.hex_code == "#ffffff" ? Theme.accent : #cccccc;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#ffffff"; root.preview_color = #ffffff; root.hex_changed("#ffffff"); } }
+                            }
+                        }
+
+                        // Row 2: Warm & Yellows
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #dc2626;
+                                border-width: root.hex_code == "#dc2626" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#dc2626"; root.preview_color = #dc2626; root.hex_changed("#dc2626"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #ef4444;
+                                border-width: root.hex_code == "#ef4444" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#ef4444"; root.preview_color = #ef4444; root.hex_changed("#ef4444"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #f97316;
+                                border-width: root.hex_code == "#f97316" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f97316"; root.preview_color = #f97316; root.hex_changed("#f97316"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #f59e0b;
+                                border-width: root.hex_code == "#f59e0b" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f59e0b"; root.preview_color = #f59e0b; root.hex_changed("#f59e0b"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #eab308;
+                                border-width: root.hex_code == "#eab308" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#eab308"; root.preview_color = #eab308; root.hex_changed("#eab308"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #84cc16;
+                                border-width: root.hex_code == "#84cc16" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#84cc16"; root.preview_color = #84cc16; root.hex_changed("#84cc16"); } }
+                            }
+                        }
+
+                        // Row 3: Greens & Blues
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #16a34a;
+                                border-width: root.hex_code == "#16a34a" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#16a34a"; root.preview_color = #16a34a; root.hex_changed("#16a34a"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #10b981;
+                                border-width: root.hex_code == "#10b981" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#10b981"; root.preview_color = #10b981; root.hex_changed("#10b981"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #06b6d4;
+                                border-width: root.hex_code == "#06b6d4" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#06b6d4"; root.preview_color = #06b6d4; root.hex_changed("#06b6d4"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #0284c7;
+                                border-width: root.hex_code == "#0284c7" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#0284c7"; root.preview_color = #0284c7; root.hex_changed("#0284c7"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #3b82f6;
+                                border-width: root.hex_code == "#3b82f6" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#3b82f6"; root.preview_color = #3b82f6; root.hex_changed("#3b82f6"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #4f46e5;
+                                border-width: root.hex_code == "#4f46e5" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#4f46e5"; root.preview_color = #4f46e5; root.hex_changed("#4f46e5"); } }
+                            }
+                        }
+
+                        // Row 4: Purples & Pinks
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #7c3aed;
+                                border-width: root.hex_code == "#7c3aed" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#7c3aed"; root.preview_color = #7c3aed; root.hex_changed("#7c3aed"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #a855f7;
+                                border-width: root.hex_code == "#a855f7" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#a855f7"; root.preview_color = #a855f7; root.hex_changed("#a855f7"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #c026d3;
+                                border-width: root.hex_code == "#c026d3" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#c026d3"; root.preview_color = #c026d3; root.hex_changed("#c026d3"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #db2777;
+                                border-width: root.hex_code == "#db2777" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#db2777"; root.preview_color = #db2777; root.hex_changed("#db2777"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #f43f5e;
+                                border-width: root.hex_code == "#f43f5e" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f43f5e"; root.preview_color = #f43f5e; root.hex_changed("#f43f5e"); } }
+                            }
+                            Rectangle {
+                                width: 28px; height: 28px; border-radius: 6px; background: #e11d48;
+                                border-width: root.hex_code == "#e11d48" ? 2px : 0px; border-color: Theme.accent;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#e11d48"; root.preview_color = #e11d48; root.hex_changed("#e11d48"); } }
+                            }
+                        }
                     }
                 }
 
-                // Row 2: Warm & Yellows
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: center;
-
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #dc2626;
-                        border-width: root.hex_code == "#dc2626" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#dc2626"; root.preview_color = #dc2626; root.hex_changed("#dc2626"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #ef4444;
-                        border-width: root.hex_code == "#ef4444" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#ef4444"; root.preview_color = #ef4444; root.hex_changed("#ef4444"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #f97316;
-                        border-width: root.hex_code == "#f97316" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f97316"; root.preview_color = #f97316; root.hex_changed("#f97316"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #f59e0b;
-                        border-width: root.hex_code == "#f59e0b" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f59e0b"; root.preview_color = #f59e0b; root.hex_changed("#f59e0b"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #eab308;
-                        border-width: root.hex_code == "#eab308" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#eab308"; root.preview_color = #eab308; root.hex_changed("#eab308"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #84cc16;
-                        border-width: root.hex_code == "#84cc16" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#84cc16"; root.preview_color = #84cc16; root.hex_changed("#84cc16"); } }
-                    }
+                // Vertical Divider
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border;
                 }
 
-                // Row 3: Greens & Blues
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: center;
+                // Right: HSL Sliders
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 10px;
+                    alignment: start;
 
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #16a34a;
-                        border-width: root.hex_code == "#16a34a" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#16a34a"; root.preview_color = #16a34a; root.hex_changed("#16a34a"); } }
+                    Text {
+                        text: "Sliders (HSL)";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: Theme.text_secondary;
                     }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #10b981;
-                        border-width: root.hex_code == "#10b981" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#10b981"; root.preview_color = #10b981; root.hex_changed("#10b981"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #06b6d4;
-                        border-width: root.hex_code == "#06b6d4" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#06b6d4"; root.preview_color = #06b6d4; root.hex_changed("#06b6d4"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #0284c7;
-                        border-width: root.hex_code == "#0284c7" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#0284c7"; root.preview_color = #0284c7; root.hex_changed("#0284c7"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #3b82f6;
-                        border-width: root.hex_code == "#3b82f6" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#3b82f6"; root.preview_color = #3b82f6; root.hex_changed("#3b82f6"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #4f46e5;
-                        border-width: root.hex_code == "#4f46e5" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#4f46e5"; root.preview_color = #4f46e5; root.hex_changed("#4f46e5"); } }
-                    }
-                }
 
-                // Row 4: Purples & Pinks
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: center;
+                    // Hue
+                    VerticalLayout {
+                        spacing: 3px;
 
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #7c3aed;
-                        border-width: root.hex_code == "#7c3aed" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#7c3aed"; root.preview_color = #7c3aed; root.hex_changed("#7c3aed"); } }
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text {
+                                text: "Hue";
+                                font-size: 11px;
+                                font-weight: 500;
+                                color: Theme.text_primary;
+                            }
+                            Text {
+                                text: @tr("{0}°", Math.round(root.hue_value));
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: Theme.accent;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 6px;
+                            border-radius: 3px;
+                            background: @linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%);
+                        }
+
+                        Slider {
+                            minimum: 0.0;
+                            maximum: 360.0;
+                            value <=> root.hue_value;
+                            changed(v) => {
+                                root.hsl_changed(root.hue_value, root.sat_value, root.light_value);
+                            }
+                        }
                     }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #a855f7;
-                        border-width: root.hex_code == "#a855f7" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#a855f7"; root.preview_color = #a855f7; root.hex_changed("#a855f7"); } }
+
+                    // Saturation
+                    VerticalLayout {
+                        spacing: 3px;
+
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text {
+                                text: "Saturation";
+                                font-size: 11px;
+                                font-weight: 500;
+                                color: Theme.text_primary;
+                            }
+                            Text {
+                                text: @tr("{0}%", Math.round(root.sat_value));
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: Theme.accent;
+                            }
+                        }
+
+                        Slider {
+                            minimum: 0.0;
+                            maximum: 100.0;
+                            value <=> root.sat_value;
+                            changed(v) => {
+                                root.hsl_changed(root.hue_value, root.sat_value, root.light_value);
+                            }
+                        }
                     }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #c026d3;
-                        border-width: root.hex_code == "#c026d3" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#c026d3"; root.preview_color = #c026d3; root.hex_changed("#c026d3"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #db2777;
-                        border-width: root.hex_code == "#db2777" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#db2777"; root.preview_color = #db2777; root.hex_changed("#db2777"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #f43f5e;
-                        border-width: root.hex_code == "#f43f5e" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f43f5e"; root.preview_color = #f43f5e; root.hex_changed("#f43f5e"); } }
-                    }
-                    Rectangle {
-                        width: 28px; height: 28px; border-radius: 6px; background: #e11d48;
-                        border-width: root.hex_code == "#e11d48" ? 2px : 0px; border-color: Theme.accent;
-                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#e11d48"; root.preview_color = #e11d48; root.hex_changed("#e11d48"); } }
+
+                    // Lightness
+                    VerticalLayout {
+                        spacing: 3px;
+
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text {
+                                text: "Lightness";
+                                font-size: 11px;
+                                font-weight: 500;
+                                color: Theme.text_primary;
+                            }
+                            Text {
+                                text: @tr("{0}%", Math.round(root.light_value));
+                                font-size: 11px;
+                                font-weight: 600;
+                                color: Theme.accent;
+                            }
+                        }
+
+                        Slider {
+                            minimum: 0.0;
+                            maximum: 100.0;
+                            value <=> root.light_value;
+                            changed(v) => {
+                                root.hsl_changed(root.hue_value, root.sat_value, root.light_value);
+                            }
+                        }
                     }
                 }
             }
 
             // Custom Hex input with preview box
             HorizontalLayout {
-                spacing: 10px;
+                spacing: 12px;
                 cross-axis-alignment: center;
 
                 Rectangle {
-                    width: 38px;
+                    width: 44px;
                     height: 34px;
                     border-radius: 6px;
                     background: root.preview_color;
