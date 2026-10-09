@@ -15,7 +15,10 @@ import {
     TagSuggestion,
     WelcomeModal,
     ExportModal,
-    WarningModal
+    WarningModal,
+    NewNoteModal,
+    ClearCanvasModal,
+    CustomColorModal
 } from "modals.slint";
 import { SettingsDialog } from "settings.slint";
 import { QuickSearchWindow, QuickSearchResult } from "quick_search.slint";
@@ -54,6 +57,7 @@ export struct NoteMetadata {
     category: string,
     tags: string,
     date: string,
+    note_type: string,
 }
 
 export component MainWindow inherits Window {
@@ -216,6 +220,31 @@ export component MainWindow inherits Window {
     in-out property <bool> show_welcome_modal: false;
     in-out property <string> welcome_vault_path: "";
     in-out property <string> welcome_error_message: "";
+
+    // --- Canvas / Drawing Note State ---
+    in-out property <string> active_note_type: "text"; // "text" | "canvas"
+    in-out property <image> canvas_image;
+    in-out property <string> canvas_tool: "pen"; // "pen" | "eraser"
+    in-out property <color> canvas_color: #1e1e1e;
+    in-out property <float> canvas_stroke_width: 3.0;
+    in-out property <string> canvas_line_style: "solid"; // "solid" | "dashed" | "dotted"
+    in-out property <bool> show_new_note_modal: false;
+    in-out property <bool> show_clear_canvas_modal: false;
+    in-out property <bool> show_custom_color_modal: false;
+    in-out property <string> custom_color_hex: "#1e1e1e";
+    in-out property <color> custom_color_preview: #1e1e1e;
+
+    // Canvas Callbacks
+    callback canvas_pointer_down(float, float);
+    callback canvas_pointer_move(float, float);
+    callback canvas_pointer_up(float, float);
+    callback canvas_tool_changed(string);
+    callback canvas_color_changed(string);
+    callback canvas_stroke_width_changed(float);
+    callback canvas_line_style_changed(string);
+    callback canvas_clear_requested();
+    callback new_note_type_selected(string);
+    callback custom_color_preview_requested(string);
 
     // --- Callbacks for Rust Backend ---
     callback unlock_requested(string);
@@ -1077,7 +1106,7 @@ export component MainWindow inherits Window {
                                         root.show_unsaved_warning = true;
                                     } else {
                                         root.editor_markdown_mode = false;
-                                        root.new_note_requested();
+                                        root.show_new_note_modal = true;
                                     }
                                 }
                             }
@@ -1246,12 +1275,32 @@ export component MainWindow inherits Window {
                                 spacing: 4px;
                                 alignment: center;
 
-                                Text {
-                                    text: note.title != "" ? note.title : "Untitled";
-                                    font-size: 13px;
-                                    font-weight: 600;
-                                    color: root.active_note_id == note.id ? Theme.accent : Theme.text_primary;
-                                    overflow: elide;
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    cross-axis-alignment: center;
+
+                                    if note.note_type == "canvas" || note.note_type == "Canvas" : Image {
+                                        source: @image-url("../assets/icons/edit.svg");
+                                        width: 12px;
+                                        height: 12px;
+                                        colorize: root.active_note_id == note.id ? Theme.accent : Theme.text_secondary;
+                                    }
+
+                                    if note.note_type != "canvas" && note.note_type != "Canvas" : Image {
+                                        source: @image-url("../assets/icons/file-text.svg");
+                                        width: 12px;
+                                        height: 12px;
+                                        colorize: root.active_note_id == note.id ? Theme.accent : Theme.text_secondary;
+                                    }
+
+                                    Text {
+                                        text: note.title != "" ? note.title : ((note.note_type == "canvas" || note.note_type == "Canvas") ? "Untitled Drawing" : "Untitled");
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: root.active_note_id == note.id ? Theme.accent : Theme.text_primary;
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
                                 }
 
                                 HorizontalLayout {
@@ -1439,10 +1488,41 @@ export component MainWindow inherits Window {
                                 height: 28px;
                                 font-size: 13px;
                                 text <=> root.note_title;
-                                placeholder-text: "Note Title...";
+                                placeholder-text: (root.active_note_type == "canvas" || root.active_note_type == "Canvas") ? "Drawing Title..." : "Note Title...";
                                 width: 250px;
                                 edited => {
                                     root.has_unsaved_changes = true;
+                                }
+                            }
+
+                            if (root.active_note_type == "canvas" || root.active_note_type == "Canvas") : Rectangle {
+                                height: 22px;
+                                border-radius: 11px;
+                                background: Theme.bg_active;
+                                border-width: 1px;
+                                border-color: Theme.accent;
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 4px;
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/edit.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: Theme.accent;
+                                    }
+
+                                    Text {
+                                        text: "Canvas";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
 
@@ -1636,7 +1716,7 @@ export component MainWindow inherits Window {
                             background: Theme.border;
                         }
 
-                        HorizontalLayout {
+                        if (root.active_note_type != "canvas" && root.active_note_type != "Canvas") : HorizontalLayout {
                             padding-left: 14px;
                             padding-right: 14px;
                             spacing: 6px;
@@ -2054,11 +2134,671 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+
+                        // Canvas Toolbar
+                        if (root.active_note_type == "canvas" || root.active_note_type == "Canvas") : HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            spacing: 8px;
+                            alignment: start;
+                            cross-axis-alignment: center;
+
+                            // 1. Pen Tool Button
+                            pen_btn := Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 5px;
+                                background: root.canvas_tool == "pen" ? Theme.bg_active : (pen_touch.has-hover ? Theme.hover : Colors.transparent);
+                                border-width: 1px;
+                                border-color: root.canvas_tool == "pen" ? Theme.accent : Colors.transparent;
+                                animate background { duration: 120ms; }
+
+                                pen_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.canvas_tool = "pen";
+                                        root.canvas_tool_changed("pen");
+                                    }
+                                }
+
+                                Image {
+                                    source: @image-url("../assets/icons/edit.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.canvas_tool == "pen" ? Theme.accent : Theme.text_secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                TooltipBubble {
+                                    text: "Pen Tool";
+                                    show: pen_touch.has-hover;
+                                    x: (parent.width - self.width) / 2;
+                                    y: parent.height + 4px;
+                                }
+                            }
+
+                            // 2. Eraser Tool Button
+                            eraser_btn := Rectangle {
+                                width: 28px;
+                                height: 28px;
+                                border-radius: 5px;
+                                background: root.canvas_tool == "eraser" ? Theme.bg_active : (eraser_touch.has-hover ? Theme.hover : Colors.transparent);
+                                border-width: 1px;
+                                border-color: root.canvas_tool == "eraser" ? Theme.accent : Colors.transparent;
+                                animate background { duration: 120ms; }
+
+                                eraser_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.canvas_tool = "eraser";
+                                        root.canvas_tool_changed("eraser");
+                                    }
+                                }
+
+                                Image {
+                                    source: @image-url("../assets/icons/eraser.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: root.canvas_tool == "eraser" ? Theme.accent : Theme.text_secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                TooltipBubble {
+                                    text: "Eraser Tool";
+                                    show: eraser_touch.has-hover;
+                                    x: (parent.width - self.width) / 2;
+                                    y: parent.height + 4px;
+                                }
+                            }
+
+                            // Separator
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Theme.border;
+                            }
+
+                            // 3. Color Swatches (for Pen)
+                            HorizontalLayout {
+                                spacing: 5px;
+                                alignment: center;
+                                cross-axis-alignment: center;
+
+                                // Charcoal / Black
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: #1e1e1e;
+                                    border-width: root.canvas_color == #1e1e1e ? 2px : 1px;
+                                    border-color: root.canvas_color == #1e1e1e ? Theme.accent : #555555;
+                                    c1_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_color = #1e1e1e;
+                                            root.canvas_color_changed("#1e1e1e");
+                                        }
+                                    }
+                                }
+
+                                // White
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: #f8fafc;
+                                    border-width: root.canvas_color == #f8fafc ? 2px : 1px;
+                                    border-color: root.canvas_color == #f8fafc ? Theme.accent : #bbbbbb;
+                                    c2_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_color = #f8fafc;
+                                            root.canvas_color_changed("#f8fafc");
+                                        }
+                                    }
+                                }
+
+                                // Red
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: #ef4444;
+                                    border-width: root.canvas_color == #ef4444 ? 2px : 0px;
+                                    border-color: Theme.accent;
+                                    c3_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_color = #ef4444;
+                                            root.canvas_color_changed("#ef4444");
+                                        }
+                                    }
+                                }
+
+                                // Orange
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: #f97316;
+                                    border-width: root.canvas_color == #f97316 ? 2px : 0px;
+                                    border-color: Theme.accent;
+                                    c4_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_color = #f97316;
+                                            root.canvas_color_changed("#f97316");
+                                        }
+                                    }
+                                }
+
+                                // Green
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: #22c55e;
+                                    border-width: root.canvas_color == #22c55e ? 2px : 0px;
+                                    border-color: Theme.accent;
+                                    c5_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_color = #22c55e;
+                                            root.canvas_color_changed("#22c55e");
+                                        }
+                                    }
+                                }
+
+                                // Blue
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: #3b82f6;
+                                    border-width: root.canvas_color == #3b82f6 ? 2px : 0px;
+                                    border-color: Theme.accent;
+                                    c6_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_color = #3b82f6;
+                                            root.canvas_color_changed("#3b82f6");
+                                        }
+                                    }
+                                }
+
+                                // Purple
+                                Rectangle {
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: #a855f7;
+                                    border-width: root.canvas_color == #a855f7 ? 2px : 0px;
+                                    border-color: Theme.accent;
+                                    c7_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_color = #a855f7;
+                                            root.canvas_color_changed("#a855f7");
+                                        }
+                                    }
+                                }
+
+                                // Custom Color Picker Button
+                                custom_c_btn := Rectangle {
+                                    width: 22px;
+                                    height: 22px;
+                                    border-radius: 11px;
+                                    background: custom_c_touch.has-hover ? Theme.hover : Theme.bg_secondary;
+                                    border-width: (root.canvas_color != #1e1e1e && root.canvas_color != #f8fafc && root.canvas_color != #ef4444 && root.canvas_color != #f97316 && root.canvas_color != #22c55e && root.canvas_color != #3b82f6 && root.canvas_color != #a855f7) ? 2px : 1px;
+                                    border-color: (root.canvas_color != #1e1e1e && root.canvas_color != #f8fafc && root.canvas_color != #ef4444 && root.canvas_color != #f97316 && root.canvas_color != #22c55e && root.canvas_color != #3b82f6 && root.canvas_color != #a855f7) ? Theme.accent : Theme.border;
+
+                                    custom_c_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.show_custom_color_modal = true;
+                                        }
+                                    }
+
+                                    Image {
+                                        source: @image-url("../assets/icons/palette.svg");
+                                        width: 12px;
+                                        height: 12px;
+                                        colorize: (root.canvas_color != #1e1e1e && root.canvas_color != #f8fafc && root.canvas_color != #ef4444 && root.canvas_color != #f97316 && root.canvas_color != #22c55e && root.canvas_color != #3b82f6 && root.canvas_color != #a855f7) ? Theme.accent : Theme.text_secondary;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Custom Color...";
+                                        show: custom_c_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+                            }
+
+                            // Separator
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Theme.border;
+                            }
+
+                            // 4. Width presets
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: "Width:";
+                                    font-size: 11px;
+                                    color: Theme.text_secondary;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                    width: 26px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_stroke_width == 2.0 ? Theme.bg_active : (w2_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_stroke_width == 2.0 ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    w2_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_stroke_width = 2.0;
+                                            root.canvas_stroke_width_changed(2.0);
+                                        }
+                                    }
+                                    Text {
+                                        text: "2px";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 26px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_stroke_width == 4.0 ? Theme.bg_active : (w4_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_stroke_width == 4.0 ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    w4_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_stroke_width = 4.0;
+                                            root.canvas_stroke_width_changed(4.0);
+                                        }
+                                    }
+                                    Text {
+                                        text: "4px";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 26px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_stroke_width == 8.0 ? Theme.bg_active : (w8_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_stroke_width == 8.0 ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    w8_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_stroke_width = 8.0;
+                                            root.canvas_stroke_width_changed(8.0);
+                                        }
+                                    }
+                                    Text {
+                                        text: "8px";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 28px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_stroke_width == 16.0 ? Theme.bg_active : (w16_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_stroke_width == 16.0 ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    w16_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_stroke_width = 16.0;
+                                            root.canvas_stroke_width_changed(16.0);
+                                        }
+                                    }
+                                    Text {
+                                        text: "16px";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 28px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_stroke_width == 24.0 ? Theme.bg_active : (w24_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_stroke_width == 24.0 ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    w24_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_stroke_width = 24.0;
+                                            root.canvas_stroke_width_changed(24.0);
+                                        }
+                                    }
+                                    Text {
+                                        text: "24px";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 28px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_stroke_width == 32.0 ? Theme.bg_active : (w32_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_stroke_width == 32.0 ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    w32_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_stroke_width = 32.0;
+                                            root.canvas_stroke_width_changed(32.0);
+                                        }
+                                    }
+                                    Text {
+                                        text: "32px";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 28px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_stroke_width == 48.0 ? Theme.bg_active : (w48_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_stroke_width == 48.0 ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    w48_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_stroke_width = 48.0;
+                                            root.canvas_stroke_width_changed(48.0);
+                                        }
+                                    }
+                                    Text {
+                                        text: "48px";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // Separator
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Theme.border;
+                            }
+
+                            // 5. Line Style Selection
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: center;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: "Style:";
+                                    font-size: 11px;
+                                    color: Theme.text_secondary;
+                                    vertical-alignment: center;
+                                }
+
+                                // Solid
+                                Rectangle {
+                                    width: 44px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_line_style == "solid" ? Theme.bg_active : (ls_solid_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_line_style == "solid" ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    ls_solid_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_line_style = "solid";
+                                            root.canvas_line_style_changed("solid");
+                                        }
+                                    }
+                                    Text {
+                                        text: "Solid";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: root.canvas_line_style == "solid" ? Theme.accent : Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    TooltipBubble {
+                                        text: "Solid continuous line";
+                                        show: ls_solid_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+
+                                // Dashed
+                                Rectangle {
+                                    width: 48px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_line_style == "dashed" ? Theme.bg_active : (ls_dash_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_line_style == "dashed" ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    ls_dash_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_line_style = "dashed";
+                                            root.canvas_line_style_changed("dashed");
+                                        }
+                                    }
+                                    Text {
+                                        text: "Dashed";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: root.canvas_line_style == "dashed" ? Theme.accent : Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    TooltipBubble {
+                                        text: "Dashed stroke pattern";
+                                        show: ls_dash_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+
+                                // Dotted
+                                Rectangle {
+                                    width: 44px;
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: root.canvas_line_style == "dotted" ? Theme.bg_active : (ls_dot_touch.has-hover ? Theme.hover : Theme.bg_secondary);
+                                    border-width: root.canvas_line_style == "dotted" ? 1px : 0px;
+                                    border-color: Theme.accent;
+                                    ls_dot_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_line_style = "dotted";
+                                            root.canvas_line_style_changed("dotted");
+                                        }
+                                    }
+                                    Text {
+                                        text: "Dotted";
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                        color: root.canvas_line_style == "dotted" ? Theme.accent : Theme.text_primary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    TooltipBubble {
+                                        text: "Dotted stroke pattern";
+                                        show: ls_dot_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+                            }
+
+                            // Separator
+                            Rectangle {
+                                width: 1px;
+                                height: 18px;
+                                background: Theme.border;
+                            }
+
+                            // 6. Clear Canvas Button
+                            clear_canvas_btn := Rectangle {
+                                height: 24px;
+                                border-radius: 4px;
+                                background: clear_canv_touch.has-hover ? Theme.danger_hover : Colors.transparent;
+                                border-width: 1px;
+                                border-color: clear_canv_touch.has-hover ? Theme.danger : Theme.border;
+                                animate background { duration: 120ms; }
+
+                                clear_canv_touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.show_clear_canvas_modal = true;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 4px;
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/trash.svg");
+                                        width: 11px;
+                                        height: 11px;
+                                        colorize: clear_canv_touch.has-hover ? Theme.danger_text : Theme.text_muted;
+                                    }
+
+                                    Text {
+                                        text: "Clear";
+                                        font-size: 11px;
+                                        font-weight: 500;
+                                        color: clear_canv_touch.has-hover ? Theme.danger_text : Theme.text_muted;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                TooltipBubble {
+                                    text: "Clear entire canvas";
+                                    show: clear_canv_touch.has-hover;
+                                    x: (parent.width - self.width) / 2;
+                                    y: parent.height + 4px;
+                                }
+                            }
+                        }
+                    }
+
+                    // Canvas Editor Area (Active when note_type is canvas)
+                    Rectangle {
+                        vertical-stretch: (root.active_note_type == "canvas" || root.active_note_type == "Canvas") ? 1 : 0;
+                        visible: (root.active_note_type == "canvas" || root.active_note_type == "Canvas");
+                        background: Theme.bg_main;
+
+                        ScrollView {
+                            width: 100%;
+                            height: 100%;
+
+                            VerticalLayout {
+                                padding: 16px;
+                                alignment: center;
+
+                                HorizontalLayout {
+                                    alignment: center;
+
+                                    Rectangle {
+                                        width: 1600px;
+                                        height: 1200px;
+                                        background: Theme.is_dark ? #18181b : #ffffff;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: Theme.border;
+                                        clip: true;
+
+                                        Image {
+                                            width: 100%;
+                                            height: 100%;
+                                            source: root.canvas_image;
+                                        }
+
+                                        canvas_touch := TouchArea {
+                                            width: 100%;
+                                            height: 100%;
+                                            mouse-cursor: root.canvas_tool == "eraser" ? crosshair : default;
+
+                                            pointer-event(ev) => {
+                                                if ev.kind == PointerEventKind.down {
+                                                    root.canvas_pointer_down(self.mouse-x / 1px, self.mouse-y / 1px);
+                                                } else if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel {
+                                                    root.canvas_pointer_up(self.mouse-x / 1px, self.mouse-y / 1px);
+                                                }
+                                            }
+
+                                            moved => {
+                                                if self.pressed {
+                                                    root.canvas_pointer_move(self.mouse-x / 1px, self.mouse-y / 1px);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Text Editor Area
                     Rectangle {
-                        vertical-stretch: 1;
+                        vertical-stretch: (root.active_note_type != "canvas" && root.active_note_type != "Canvas") ? 1 : 0;
+                        visible: (root.active_note_type != "canvas" && root.active_note_type != "Canvas");
                         background: Theme.bg_main;
 
                         // 1. Plain Text Editor View
@@ -3259,6 +3999,41 @@ export component MainWindow inherits Window {
         }
         cancel => {
             root.show_export_modal = false;
+        }
+    }
+
+    if root.show_new_note_modal : NewNoteModal {
+        select_type(ntype) => {
+            root.show_new_note_modal = false;
+            root.new_note_type_selected(ntype);
+        }
+        close => {
+            root.show_new_note_modal = false;
+        }
+    }
+
+    if root.show_clear_canvas_modal : ClearCanvasModal {
+        confirm => {
+            root.show_clear_canvas_modal = false;
+            root.canvas_clear_requested();
+        }
+        close => {
+            root.show_clear_canvas_modal = false;
+        }
+    }
+
+    if root.show_custom_color_modal : CustomColorModal {
+        hex_code <=> root.custom_color_hex;
+        preview_color <=> root.custom_color_preview;
+        hex_changed(hex) => {
+            root.custom_color_preview_requested(hex);
+        }
+        apply_color(hex) => {
+            root.show_custom_color_modal = false;
+            root.canvas_color_changed(hex);
+        }
+        close => {
+            root.show_custom_color_modal = false;
         }
     }
 }

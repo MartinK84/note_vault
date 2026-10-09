@@ -2159,4 +2159,751 @@ export component AttachmentPreviewModal inherits Rectangle {
     }
 }
 
+// ==========================================
+// MODAL: NEW NOTE TYPE SELECTION
+// ==========================================
+export component NewNoteModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.overlay;
+
+    callback select_type(string);
+    callback close();
+
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 480px;
+        height: content_layout.preferred-height;
+        background: Theme.bg_surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_active;
+        clip: true;
+
+        TouchArea {} // Block click through
+
+        content_layout := VerticalLayout {
+            padding-top: 20px;
+            padding-bottom: 20px;
+            padding-left: 24px;
+            padding-right: 24px;
+            spacing: 16px;
+            alignment: start;
+
+            // Header
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: space-between;
+                cross-axis-alignment: center;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        source: @image-url("../assets/icons/plus.svg");
+                        width: 18px;
+                        height: 18px;
+                        colorize: Theme.accent;
+                    }
+
+                    Text {
+                        text: "Create New Note";
+                        font-size: 17px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                ModalCloseButton {
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+
+            Text {
+                text: "Select the format for the new note:";
+                font-size: 12px;
+                color: Theme.text_secondary;
+            }
+
+            // Cards container
+            VerticalLayout {
+                spacing: 12px;
+
+                // Option 1: Text Note
+                text_card := Rectangle {
+                    height: 72px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: text_touch.has-hover ? Theme.accent : Theme.border;
+                    background: text_touch.has-hover ? Theme.hover : Theme.bg_secondary;
+                    animate background { duration: 120ms; }
+                    animate border-color { duration: 120ms; }
+
+                    text_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.select_type("text");
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 14px;
+                        cross-axis-alignment: center;
+
+                        Rectangle {
+                            width: 40px;
+                            height: 40px;
+                            border-radius: 8px;
+                            background: Theme.bg_surface;
+                            border-width: 1px;
+                            border-color: Theme.border;
+
+                            Image {
+                                source: @image-url("../assets/icons/file-text.svg");
+                                width: 20px;
+                                height: 20px;
+                                colorize: Theme.accent;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 3px;
+                            alignment: center;
+
+                            Text {
+                                text: "Text Note";
+                                font-size: 14px;
+                                font-weight: 600;
+                                color: Theme.text_primary;
+                            }
+
+                            Text {
+                                text: "Rich Markdown formatting, syntax highlighting, and tables.";
+                                font-size: 11px;
+                                color: Theme.text_secondary;
+                            }
+                        }
+                    }
+                }
+
+                // Option 2: Canvas Note
+                canvas_card := Rectangle {
+                    height: 72px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: canvas_touch.has-hover ? Theme.accent : Theme.border;
+                    background: canvas_touch.has-hover ? Theme.hover : Theme.bg_secondary;
+                    animate background { duration: 120ms; }
+                    animate border-color { duration: 120ms; }
+
+                    canvas_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.select_type("canvas");
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 14px;
+                        cross-axis-alignment: center;
+
+                        Rectangle {
+                            width: 40px;
+                            height: 40px;
+                            border-radius: 8px;
+                            background: Theme.bg_surface;
+                            border-width: 1px;
+                            border-color: Theme.border;
+
+                            Image {
+                                source: @image-url("../assets/icons/edit.svg");
+                                width: 20px;
+                                height: 20px;
+                                colorize: Theme.accent;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 3px;
+                            alignment: center;
+
+                            Text {
+                                text: "Canvas / Drawing Note";
+                                font-size: 14px;
+                                font-weight: 600;
+                                color: Theme.text_primary;
+                            }
+
+                            Text {
+                                text: "Freehand sketchpad with tiny-skia pen, colors, and eraser.";
+                                font-size: 11px;
+                                color: Theme.text_secondary;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Cancel Button
+            HorizontalLayout {
+                alignment: end;
+                padding-top: 4px;
+
+                Rectangle {
+                    height: 30px;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: cancel_touch.has-hover ? Theme.hover : Colors.transparent;
+                    animate background { duration: 120ms; }
+
+                    cancel_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.close();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        alignment: center;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: "Cancel";
+                            font-size: 12px;
+                            font-weight: 500;
+                            color: Theme.text_secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: CLEAR CANVAS CONFIRMATION
+// ==========================================
+export component ClearCanvasModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.overlay;
+
+    callback confirm();
+    callback close();
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: clear_content.preferred-height;
+        background: Theme.bg_surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_active;
+        clip: true;
+
+        clear_content := VerticalLayout {
+            padding-top: 18px;
+            padding-bottom: 18px;
+            padding-left: 22px;
+            padding-right: 22px;
+            spacing: 14px;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: space-between;
+                cross-axis-alignment: center;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        source: @image-url("../assets/icons/alert-triangle.svg");
+                        width: 20px;
+                        height: 20px;
+                        colorize: Theme.danger;
+                    }
+
+                    Text {
+                        text: "Clear Canvas";
+                        font-size: 17px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                ModalCloseButton {
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+
+            Text {
+                text: "Are you sure you want to clear the entire canvas? All drawing strokes on this note will be erased. This action cannot be undone.";
+                font-size: 12px;
+                color: Theme.text_secondary;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                padding-top: 4px;
+
+                Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: cancel_touch.has-hover ? Theme.hover : Colors.transparent;
+                    animate background { duration: 120ms; }
+
+                    cancel_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.close();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        alignment: center;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: "Cancel";
+                            font-size: 12px;
+                            font-weight: 500;
+                            color: Theme.text_secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    background: confirm_touch.has-hover ? #dc2626 : Theme.danger;
+                    animate background { duration: 120ms; }
+
+                    confirm_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.confirm();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        alignment: center;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: "Clear Canvas";
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MODAL: CUSTOM COLOR PICKER
+// ==========================================
+export component CustomColorModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.overlay;
+
+    in-out property <string> hex_code: "#1e1e1e";
+    in-out property <color> preview_color: #1e1e1e;
+
+    callback apply_color(string);
+    callback close();
+    callback hex_changed(string);
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 440px;
+        height: color_content.preferred-height;
+        background: Theme.bg_surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_active;
+        clip: true;
+
+        color_content := VerticalLayout {
+            padding-top: 18px;
+            padding-bottom: 18px;
+            padding-left: 22px;
+            padding-right: 22px;
+            spacing: 14px;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: space-between;
+                cross-axis-alignment: center;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        source: @image-url("../assets/icons/palette.svg");
+                        width: 20px;
+                        height: 20px;
+                        colorize: Theme.accent;
+                    }
+
+                    Text {
+                        text: "Custom Drawing Color";
+                        font-size: 17px;
+                        font-weight: 700;
+                        color: Theme.text_primary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                ModalCloseButton {
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+
+            Text {
+                text: "Select a color preset or type any custom HEX color code:";
+                font-size: 12px;
+                color: Theme.text_secondary;
+            }
+
+            // Swatches Palette: 4 rows of 6 colors
+            VerticalLayout {
+                spacing: 7px;
+
+                // Row 1: Grayscale & Neutrals
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    // Black
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: #000000;
+                        border-width: root.hex_code == "#000000" ? 2px : 1px;
+                        border-color: root.hex_code == "#000000" ? Theme.accent : #444444;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#000000"; root.preview_color = #000000; root.hex_changed("#000000"); } }
+                    }
+                    // Charcoal
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: #1e1e1e;
+                        border-width: root.hex_code == "#1e1e1e" ? 2px : 1px;
+                        border-color: root.hex_code == "#1e1e1e" ? Theme.accent : #444444;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#1e1e1e"; root.preview_color = #1e1e1e; root.hex_changed("#1e1e1e"); } }
+                    }
+                    // Dark Gray
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: #475569;
+                        border-width: root.hex_code == "#475569" ? 2px : 1px;
+                        border-color: root.hex_code == "#475569" ? Theme.accent : #334155;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#475569"; root.preview_color = #475569; root.hex_changed("#475569"); } }
+                    }
+                    // Slate
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: #94a3b8;
+                        border-width: root.hex_code == "#94a3b8" ? 2px : 1px;
+                        border-color: root.hex_code == "#94a3b8" ? Theme.accent : #64748b;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#94a3b8"; root.preview_color = #94a3b8; root.hex_changed("#94a3b8"); } }
+                    }
+                    // Light Gray
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: #cbd5e1;
+                        border-width: root.hex_code == "#cbd5e1" ? 2px : 1px;
+                        border-color: root.hex_code == "#cbd5e1" ? Theme.accent : #94a3b8;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#cbd5e1"; root.preview_color = #cbd5e1; root.hex_changed("#cbd5e1"); } }
+                    }
+                    // White
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: #ffffff;
+                        border-width: root.hex_code == "#ffffff" ? 2px : 1px;
+                        border-color: root.hex_code == "#ffffff" ? Theme.accent : #cccccc;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#ffffff"; root.preview_color = #ffffff; root.hex_changed("#ffffff"); } }
+                    }
+                }
+
+                // Row 2: Warm & Yellows
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #dc2626;
+                        border-width: root.hex_code == "#dc2626" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#dc2626"; root.preview_color = #dc2626; root.hex_changed("#dc2626"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #ef4444;
+                        border-width: root.hex_code == "#ef4444" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#ef4444"; root.preview_color = #ef4444; root.hex_changed("#ef4444"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #f97316;
+                        border-width: root.hex_code == "#f97316" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f97316"; root.preview_color = #f97316; root.hex_changed("#f97316"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #f59e0b;
+                        border-width: root.hex_code == "#f59e0b" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f59e0b"; root.preview_color = #f59e0b; root.hex_changed("#f59e0b"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #eab308;
+                        border-width: root.hex_code == "#eab308" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#eab308"; root.preview_color = #eab308; root.hex_changed("#eab308"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #84cc16;
+                        border-width: root.hex_code == "#84cc16" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#84cc16"; root.preview_color = #84cc16; root.hex_changed("#84cc16"); } }
+                    }
+                }
+
+                // Row 3: Greens & Blues
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #16a34a;
+                        border-width: root.hex_code == "#16a34a" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#16a34a"; root.preview_color = #16a34a; root.hex_changed("#16a34a"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #10b981;
+                        border-width: root.hex_code == "#10b981" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#10b981"; root.preview_color = #10b981; root.hex_changed("#10b981"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #06b6d4;
+                        border-width: root.hex_code == "#06b6d4" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#06b6d4"; root.preview_color = #06b6d4; root.hex_changed("#06b6d4"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #0284c7;
+                        border-width: root.hex_code == "#0284c7" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#0284c7"; root.preview_color = #0284c7; root.hex_changed("#0284c7"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #3b82f6;
+                        border-width: root.hex_code == "#3b82f6" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#3b82f6"; root.preview_color = #3b82f6; root.hex_changed("#3b82f6"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #4f46e5;
+                        border-width: root.hex_code == "#4f46e5" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#4f46e5"; root.preview_color = #4f46e5; root.hex_changed("#4f46e5"); } }
+                    }
+                }
+
+                // Row 4: Purples & Pinks
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #7c3aed;
+                        border-width: root.hex_code == "#7c3aed" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#7c3aed"; root.preview_color = #7c3aed; root.hex_changed("#7c3aed"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #a855f7;
+                        border-width: root.hex_code == "#a855f7" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#a855f7"; root.preview_color = #a855f7; root.hex_changed("#a855f7"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #c026d3;
+                        border-width: root.hex_code == "#c026d3" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#c026d3"; root.preview_color = #c026d3; root.hex_changed("#c026d3"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #db2777;
+                        border-width: root.hex_code == "#db2777" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#db2777"; root.preview_color = #db2777; root.hex_changed("#db2777"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #f43f5e;
+                        border-width: root.hex_code == "#f43f5e" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#f43f5e"; root.preview_color = #f43f5e; root.hex_changed("#f43f5e"); } }
+                    }
+                    Rectangle {
+                        width: 28px; height: 28px; border-radius: 6px; background: #e11d48;
+                        border-width: root.hex_code == "#e11d48" ? 2px : 0px; border-color: Theme.accent;
+                        TouchArea { mouse-cursor: pointer; clicked => { root.hex_code = "#e11d48"; root.preview_color = #e11d48; root.hex_changed("#e11d48"); } }
+                    }
+                }
+            }
+
+            // Custom Hex input with preview box
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+
+                Rectangle {
+                    width: 38px;
+                    height: 34px;
+                    border-radius: 6px;
+                    background: root.preview_color;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                }
+
+                hex_edit := LineEdit {
+                    text <=> root.hex_code;
+                    placeholder-text: "#RRGGBB";
+                    font-size: 13px;
+                    horizontal-stretch: 1;
+                    edited => {
+                        root.hex_changed(self.text);
+                    }
+                    accepted => {
+                        root.apply_color(root.hex_code);
+                    }
+                }
+            }
+
+            // Footer action buttons
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                padding-top: 4px;
+
+                Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: cancel_c_touch.has-hover ? Theme.hover : Colors.transparent;
+                    animate background { duration: 120ms; }
+
+                    cancel_c_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.close();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        alignment: center;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: "Cancel";
+                            font-size: 12px;
+                            font-weight: 500;
+                            color: Theme.text_secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    background: apply_c_touch.has-hover ? Theme.accent_hover : Theme.accent;
+                    animate background { duration: 120ms; }
+
+                    apply_c_touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.apply_color(root.hex_code);
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        alignment: center;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: "Apply Color";
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: #ffffff;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 

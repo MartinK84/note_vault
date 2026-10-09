@@ -245,6 +245,46 @@ pub fn compact_note_attachments(note_path: &Path) {
     }
 }
 
+/// Expected canvas drawing path for a note.
+pub fn get_canvas_path(note_path: &Path) -> PathBuf {
+    let parent = note_path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = note_path.file_stem().and_then(|s| s.to_str()).unwrap_or("note");
+    parent.join(format!("{}_canvas.vault", stem))
+}
+
+/// Checks if a file path is a note canvas drawing file.
+pub fn is_canvas_file(path: &Path) -> bool {
+    if path.extension().and_then(|s| s.to_str()) != Some("vault") {
+        return false;
+    }
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        stem.ends_with("_canvas")
+    } else {
+        false
+    }
+}
+
+/// Encrypts and saves canvas PNG drawing data to disk using the exact same encryption logic as attachments.
+pub fn save_canvas_encrypted(
+    png_bytes: &[u8],
+    password: &str,
+    keyfile_bytes: Option<&[u8]>,
+    output_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let attachment = NoteAttachment::new("canvas.png", png_bytes.to_vec());
+    save_attachment_encrypted(&attachment, password, keyfile_bytes, output_path)
+}
+
+/// Decrypts and loads canvas PNG drawing data from disk using the exact same decryption logic as attachments.
+pub fn load_canvas_decrypted(
+    password: &str,
+    keyfile_bytes: Option<&[u8]>,
+    input_path: &Path,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let attachment = load_attachment_decrypted(password, keyfile_bytes, input_path)?;
+    Ok(attachment.data)
+}
+
 /// Moves all attachment files of a note when the note itself is moved to a new path.
 pub fn move_note_attachments(old_note_path: &Path, new_note_path: &Path) {
     let attachments = list_note_attachment_files(old_note_path);
@@ -258,6 +298,11 @@ pub fn move_note_attachments(old_note_path: &Path, new_note_path: &Path) {
             }
         }
     }
+    let old_canvas = get_canvas_path(old_note_path);
+    if old_canvas.exists() {
+        let new_canvas = get_canvas_path(new_note_path);
+        let _ = fs::rename(&old_canvas, &new_canvas);
+    }
 }
 
 /// Deletes all attachment files of a note when the note itself is deleted.
@@ -265,6 +310,10 @@ pub fn delete_note_attachments(note_path: &Path) {
     let attachments = list_note_attachment_files(note_path);
     for p in attachments {
         let _ = fs::remove_file(p);
+    }
+    let canvas_file = get_canvas_path(note_path);
+    if canvas_file.exists() {
+        let _ = fs::remove_file(canvas_file);
     }
 }
 

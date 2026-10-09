@@ -16,13 +16,14 @@ use note_vault::config::AppConfig;
 use note_vault::{
     compact_note_attachments, delete_note_attachments, format_decrypted_json_export,
     format_decrypted_txt_export, format_file_size, format_line_numbers, format_markdown_export,
-    format_unix_date, format_unix_timestamp, get_next_attachment_path, is_attachment_file,
-    is_image_filename, is_text_data, is_text_filename,
+    format_unix_date, format_unix_timestamp, get_canvas_path, get_next_attachment_path,
+    is_attachment_file, is_canvas_file, is_image_filename, is_text_data, is_text_filename,
     list_note_attachment_files, load_attachment_decrypted, load_attachment_metadata,
-    load_note_decrypted, move_note_attachments, parse_markdown_into_blocks, render_markdown_styled,
-    sanitize_filename, save_attachment_encrypted, save_note_encrypted, validate_folder_name,
-    AttachmentItem, MainWindow, Note, NoteAttachment, NoteMetadata, QuickSearchResult,
-    QuickSearchWindow, TagSuggestion, Theme, UnlockWindow,
+    load_canvas_decrypted, load_note_decrypted, move_note_attachments, parse_markdown_into_blocks,
+    render_markdown_styled, sanitize_filename, save_attachment_encrypted, save_canvas_encrypted,
+    save_note_encrypted, validate_folder_name, AttachmentItem, MainWindow, Note, NoteAttachment,
+    NoteMetadata, NoteType, QuickSearchResult, QuickSearchWindow, TagSuggestion, Theme,
+    UnlockWindow,
 };
 use rayon::prelude::*;
 use slint::{ComponentHandle, Model};
@@ -67,6 +68,155 @@ struct NoteMetaSummary {
     date: String,
     updated_at: i64,
     file_path: PathBuf,
+    note_type: NoteType,
+}
+
+/// Active in-memory state for canvas / drawing notes.
+struct ActiveCanvasState {
+    pixmap: Option<tiny_skia::Pixmap>,
+    last_point: Option<(f32, f32)>,
+    tool: String, // "pen" or "eraser"
+    color: tiny_skia::Color,
+    stroke_width: f32,
+    line_style: String, // "solid", "dashed", "dotted"
+    dash_offset: f32,
+}
+
+impl Default for ActiveCanvasState {
+    fn default() -> Self {
+        Self {
+            pixmap: None,
+            last_point: None,
+            tool: "pen".to_string(),
+            color: tiny_skia::Color::from_rgba8(30, 30, 30, 255),
+            stroke_width: 3.0,
+            line_style: "solid".to_string(),
+            dash_offset: 0.0,
+        }
+    }
+}
+
+/// Computes the total period of the dash pattern for the given line style and width.
+fn get_dash_cycle(line_style: &str, stroke_width: f32) -> f32 {
+    match line_style {
+        "dashed" => {
+            let dash_len = (stroke_width * 3.0).max(10.0);
+            let gap_len = (stroke_width * 2.0).max(8.0);
+            dash_len + gap_len
+        }
+        "dotted" => {
+            let dot_len = 0.1;
+            let gap_len = (stroke_width * 2.2).max(8.0);
+            dot_len + gap_len
+        }
+        _ => 1.0,
+    }
+}
+
+/// Converts a tiny_skia::Pixmap into a slint::Image (converting premultiplied RGBA to straight RGBA).
+fn pixmap_to_slint_image(pixmap: &tiny_skia::Pixmap) -> slint::Image {
+    let width = pixmap.width();
+    let height = pixmap.height();
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+    let slice = buffer.make_mut_slice();
+    let data = pixmap.data();
+    for (i, p) in slice.iter_mut().enumerate() {
+        let r = data[i * 4];
+        let g = data[i * 4 + 1];
+        let b = data[i * 4 + 2];
+        let a = data[i * 4 + 3];
+        if a == 0 {
+            *p = slint::Rgba8Pixel { r: 0, g: 0, b: 0, a: 0 };
+        } else if a == 255 {
+            *p = slint::Rgba8Pixel { r, g, b, a: 255 };
+        } else {
+            let r = ((r as u32 * 255 + (a as u32 / 2)) / a as u32).min(255) as u8;
+            let g = ((g as u32 * 255 + (a as u32 / 2)) / a as u32).min(255) as u8;
+            let b = ((b as u32 * 255 + (a as u32 / 2)) / a as u32).min(255) as u8;
+            *p = slint::Rgba8Pixel { r, g, b, a };
+        }
+    }
+    slint::Image::from_rgba8(buffer)
+}
+
+/// Draws a smoothed stroke between two points on the Pixmap using tiny-skia.
+fn draw_stroke_on_pixmap(
+    pixmap: &mut tiny_skia::Pixmap,
+    from: (f32, f32),
+    to: (f32, f32),
+    tool: &str,
+    color: tiny_skia::Color,
+    stroke_width: f32,
+    line_style: &str,
+    dash_offset: f32,
+) {
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(from.0, from.1);
+    if (from.0 - to.0).abs() < 0.001 && (from.1 - to.1).abs() < 0.001 {
+        pb.line_to(to.0 + 0.05, to.1);
+    } else {
+        pb.line_to(to.0, to.1);
+    }
+    let Some(path) = pb.finish() else { return };
+
+    let mut stroke = tiny_skia::Stroke::default();
+    stroke.width = stroke_width;
+    stroke.line_cap = tiny_skia::LineCap::Round;
+    stroke.line_join = tiny_skia::LineJoin::Round;
+
+    if tool == "eraser" {
+        stroke.dash = None;
+    } else {
+        match line_style {
+            "dashed" => {
+                let dash_len = (stroke_width * 3.0).max(10.0);
+                let gap_len = (stroke_width * 2.0).max(8.0);
+                stroke.dash = tiny_skia::StrokeDash::new(vec![dash_len, gap_len], dash_offset);
+            }
+            "dotted" => {
+                let dot_len = 0.1;
+                let gap_len = (stroke_width * 2.2).max(8.0);
+                stroke.dash = tiny_skia::StrokeDash::new(vec![dot_len, gap_len], dash_offset);
+            }
+            _ => {
+                stroke.dash = None;
+            }
+        }
+    }
+
+    let mut paint = tiny_skia::Paint::default();
+    paint.anti_alias = true;
+    if tool == "eraser" {
+        paint.blend_mode = tiny_skia::BlendMode::Clear;
+    } else {
+        paint.set_color(color);
+        paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+    }
+
+    pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+}
+
+/// Parses hex color string into (r, g, b) bytes if valid.
+fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    let s = hex.trim().trim_start_matches('#');
+    if s.len() == 6 {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&s[0..2], 16),
+            u8::from_str_radix(&s[2..4], 16),
+            u8::from_str_radix(&s[4..6], 16),
+        ) {
+            return Some((r, g, b));
+        }
+    }
+    None
+}
+
+/// Parses hex color string into tiny_skia::Color.
+fn parse_hex_color(hex: &str) -> tiny_skia::Color {
+    if let Some((r, g, b)) = parse_hex_rgb(hex) {
+        return tiny_skia::Color::from_rgba8(r, g, b, 255);
+    }
+    tiny_skia::Color::from_rgba8(30, 30, 30, 255)
 }
 
 /// Builds a 32x32 RGBA icon for the system tray using the dark orange logo.svg.
@@ -944,6 +1094,10 @@ fn refresh_models(
             category: meta.category.into(),
             tags: meta.tags.join(", ").into(),
             date: format_unix_date(meta.updated_at).into(),
+            note_type: match meta.note_type {
+                NoteType::Canvas => "canvas".into(),
+                NoteType::Text => "text".into(),
+            },
         })
         .collect();
 
@@ -1006,6 +1160,7 @@ fn load_note_into_ui(
     metadata_store: &Arc<Mutex<HashMap<String, NoteMetaSummary>>>,
     session_password: &Arc<Mutex<Option<Zeroizing<String>>>>,
     session_keyfile: &Arc<Mutex<Option<Zeroizing<Vec<u8>>>>>,
+    canvas_state: &Arc<Mutex<ActiveCanvasState>>,
 ) {
     ui.set_show_attachment_preview_modal(false);
     ui.set_preview_image(slint::Image::default());
@@ -1040,40 +1195,99 @@ fn load_note_into_ui(
         let tags_model: slint::ModelRc<slint::SharedString> =
             std::rc::Rc::new(slint::VecModel::from(tags_slint)).into();
         ui.set_note_tags(tags_model);
-        ui.set_note_date(meta.date.clone().into());
+        ui.set_active_note_type(meta.note_type.as_str().into());
 
-        if let Some(password) = password_opt {
-            let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
-            match load_note_decrypted(&password, kf_bytes, &meta.file_path) {
-                Ok(mut note) => {
-                    ui.set_line_numbers_text(format_line_numbers(&note.content).into());
-                    let blocks = parse_markdown_into_blocks(&note.content);
-                    ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::from(blocks)).into());
-                    ui.set_note_markdown_rendered(render_markdown_styled(&note.content));
-                    ui.set_note_content(note.content.as_str().into());
-                    note.zeroize();
-                    update_attachments_in_ui(ui, &meta.file_path, &password, kf_bytes);
-                }
-                Err(e) => {
-                    eprintln!("Error decrypting note at {:?}: {}", meta.file_path, e);
-                    ui.set_line_numbers_text("1".into());
-                    ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
-                    ui.set_note_markdown_rendered(slint::StyledText::default());
-                    ui.set_note_content(
-                        format!("[Error: Failed to decrypt note: {}]", e).into(),
-                    );
-                    ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
-                    ui.set_attachment_count(0);
-                }
-            }
-        } else {
-            eprintln!("Error: Cannot decrypt note, vault session is locked.");
+        if meta.note_type == NoteType::Canvas {
             ui.set_line_numbers_text("1".into());
             ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_markdown_rendered(slint::StyledText::default());
             ui.set_note_content("".into());
-            ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
-            ui.set_attachment_count(0);
+
+            let canvas_path = get_canvas_path(&meta.file_path);
+            let mut pixmap_opt = None;
+            if canvas_path.exists() {
+                if let Some(password) = password_opt.as_ref() {
+                    let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+                    match load_canvas_decrypted(password, kf_bytes, &canvas_path) {
+                        Ok(png_bytes) => match tiny_skia::Pixmap::decode_png(&png_bytes) {
+                            Ok(pix) => pixmap_opt = Some(pix),
+                            Err(e) => eprintln!("Failed to decode canvas PNG from {:?}: {}", canvas_path, e),
+                        },
+                        Err(e) => eprintln!("Failed to decrypt canvas at {:?}: {}", canvas_path, e),
+                    }
+                }
+            }
+
+            let pixmap = pixmap_opt.unwrap_or_else(|| {
+                tiny_skia::Pixmap::new(1600, 1200).expect("failed to allocate canvas pixmap")
+            });
+            let img = pixmap_to_slint_image(&pixmap);
+            ui.set_canvas_image(img);
+
+            ui.set_canvas_tool("pen".into());
+            let c = ui.get_canvas_color();
+            let sw = ui.get_canvas_stroke_width();
+            let ls = ui.get_canvas_line_style().to_string();
+            {
+                let mut cstate = canvas_state.lock().unwrap();
+                cstate.pixmap = Some(pixmap);
+                cstate.last_point = None;
+                cstate.dash_offset = 0.0;
+                cstate.tool = "pen".to_string();
+                cstate.color = tiny_skia::Color::from_rgba8(c.red(), c.green(), c.blue(), c.alpha());
+                cstate.stroke_width = sw;
+                cstate.line_style = ls;
+            }
+
+            if let Some(password) = password_opt.as_ref() {
+                let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+                update_attachments_in_ui(ui, &meta.file_path, password, kf_bytes);
+            } else {
+                ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_attachment_count(0);
+            }
+        } else {
+            // Text note: reset canvas state
+            {
+                let mut cstate = canvas_state.lock().unwrap();
+                cstate.pixmap = None;
+                cstate.last_point = None;
+            }
+            ui.set_canvas_image(slint::Image::default());
+
+            if let Some(password) = password_opt {
+                let kf_bytes = keyfile_opt.as_deref().map(|b| b.as_slice());
+                match load_note_decrypted(&password, kf_bytes, &meta.file_path) {
+                    Ok(mut note) => {
+                        ui.set_line_numbers_text(format_line_numbers(&note.content).into());
+                        let blocks = parse_markdown_into_blocks(&note.content);
+                        ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::from(blocks)).into());
+                        ui.set_note_markdown_rendered(render_markdown_styled(&note.content));
+                        ui.set_note_content(note.content.as_str().into());
+                        note.zeroize();
+                        update_attachments_in_ui(ui, &meta.file_path, &password, kf_bytes);
+                    }
+                    Err(e) => {
+                        eprintln!("Error decrypting note at {:?}: {}", meta.file_path, e);
+                        ui.set_line_numbers_text("1".into());
+                        ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
+                        ui.set_note_markdown_rendered(slint::StyledText::default());
+                        ui.set_note_content(
+                            format!("[Error: Failed to decrypt note: {}]", e).into(),
+                        );
+                        ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+                        ui.set_attachment_count(0);
+                    }
+                }
+            } else {
+                eprintln!("Error: Cannot decrypt note, vault session is locked.");
+                ui.set_line_numbers_text("1".into());
+                ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_note_markdown_rendered(slint::StyledText::default());
+                ui.set_note_content("".into());
+                ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_attachment_count(0);
+            }
         }
 
         ui.set_has_unsaved_changes(false);
@@ -1102,6 +1316,8 @@ fn trigger_vault_reload(
     ui.set_loading_progress(0.0);
     ui.set_loading_status_text("Discovering encrypted notes...".into());
     ui.set_active_note_id("".into());
+    ui.set_active_note_type("text".into());
+    ui.set_canvas_image(slint::Image::default());
     ui.set_note_title("".into());
     ui.set_note_content("".into());
     ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
@@ -1123,7 +1339,7 @@ fn trigger_vault_reload(
         {
             let p = entry.path();
             if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("vault") {
-                if !is_attachment_file(p) {
+                if !is_attachment_file(p) && !is_canvas_file(p) {
                     vault_files.push(p.to_path_buf());
                 }
             }
@@ -1200,6 +1416,7 @@ fn trigger_vault_reload(
                         date,
                         updated_at,
                         file_path: file_path.clone(),
+                        note_type: note.note_type,
                     };
 
                     note.zeroize();
@@ -1352,6 +1569,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(Mutex::new(HashMap::new()));
     let active_folder: Arc<Mutex<String>> = Arc::new(Mutex::new("*All Notes*".to_string()));
     let search_query: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let canvas_state = Arc::new(Mutex::new(ActiveCanvasState::default()));
 
     // Slint Windows: Main, QuickSearch, UnlockWindow
     let main_window = MainWindow::new()?;
@@ -1399,6 +1617,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_editor_font_size(config.editor_font_size as i32);
     main_window.set_editor_markdown_mode(false);
     main_window.set_line_numbers_text("1".into());
+    main_window.set_active_note_type("text".into());
+    main_window.set_canvas_tool("pen".into());
+    main_window.set_canvas_stroke_width(3.0);
 
     // Initialize column widths from config
     main_window.set_folder_pane_width(config.folder_pane_width as f32);
@@ -1768,6 +1989,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
         let is_quick_search_open = Arc::clone(&is_quick_search_open);
+        let canvas_state = Arc::clone(&canvas_state);
 
         move |note_id: slint::SharedString| {
             let note_id_str = note_id.as_str().to_string();
@@ -1802,7 +2024,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     refresh_models(&ui, &v_path, &metadata_store, &active_folder, &search_query);
 
                     // 4. Load the decrypted note into the UI editor (Pane 3)
-                    load_note_into_ui(&ui, &note_id_str, &metadata_store, &session_password, &session_keyfile);
+                    load_note_into_ui(&ui, &note_id_str, &metadata_store, &session_password, &session_keyfile, &canvas_state);
 
                     // 5. Restore, show, and focus MainWindow
                     let _ = ui.show();
@@ -2919,6 +3141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let metadata_store = Arc::clone(&metadata_store);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
+        let canvas_state = Arc::clone(&canvas_state);
 
         move |folder| {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -2932,6 +3155,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             ui.set_note_category(note_cat.into());
             ui.set_active_note_id("".into());
+            ui.set_active_note_type("text".into());
+            ui.set_canvas_image(slint::Image::default());
+            {
+                let mut cstate = canvas_state.lock().unwrap();
+                cstate.pixmap = None;
+                cstate.last_point = None;
+            }
             ui.set_note_title("".into());
             ui.set_note_content("".into());
             ui.set_editor_markdown_mode(false);
@@ -3037,6 +3267,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let metadata_store = Arc::clone(&metadata_store);
         let session_password = Arc::clone(&session_password);
         let session_keyfile = Arc::clone(&session_keyfile);
+        let canvas_state = Arc::clone(&canvas_state);
 
         move |note_id| {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -3046,7 +3277,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_pending_action_payload(note_id);
                 ui.set_show_unsaved_warning(true);
             } else {
-                load_note_into_ui(&ui, note_id.as_str(), &metadata_store, &session_password, &session_keyfile);
+                load_note_into_ui(&ui, note_id.as_str(), &metadata_store, &session_password, &session_keyfile, &canvas_state);
             }
         }
     });
@@ -3063,6 +3294,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
         let use_multithreading = Arc::clone(&use_multithreading);
+        let canvas_state = Arc::clone(&canvas_state);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -3082,6 +3314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &metadata_store,
                         &session_password,
                         &session_keyfile,
+                        &canvas_state,
                     );
                 }
                 "select_folder" => {
@@ -3095,6 +3328,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     ui.set_note_category(note_cat.into());
                     ui.set_active_note_id("".into());
+                    ui.set_active_note_type("text".into());
+                    ui.set_canvas_image(slint::Image::default());
+                    {
+                        let mut cstate = canvas_state.lock().unwrap();
+                        cstate.pixmap = None;
+                        cstate.last_point = None;
+                    }
                     ui.set_note_title("".into());
                     ui.set_note_content("".into());
                     ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
@@ -3106,15 +3346,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if cur_folder == "*All Notes*" {
                         return;
                     }
-                    ui.set_active_note_id("new".into());
-                    ui.set_note_title("Untitled Note".into());
-                    ui.set_note_category(cur_folder.into());
-                    ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
-                    ui.set_note_date("Just now".into());
-                    ui.set_note_content("".into());
-                    ui.set_editor_markdown_mode(false);
-                    ui.set_line_numbers_text("1".into());
-                    ui.set_has_unsaved_changes(false);
+                    ui.set_show_new_note_modal(true);
                 }
                 "new_folder" => {
                     ui.set_new_folder_name("".into());
@@ -3193,6 +3425,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let session_keyfile = Arc::clone(&session_keyfile);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
+        let canvas_state = Arc::clone(&canvas_state);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -3213,6 +3446,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_folders(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_current_notes(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_active_note_id("".into());
+            ui.set_active_note_type("text".into());
+            ui.set_canvas_image(slint::Image::default());
+            {
+                let mut cstate = canvas_state.lock().unwrap();
+                cstate.pixmap = None;
+                cstate.last_point = None;
+            }
             ui.set_note_title("".into());
             ui.set_active_folder("*All Notes*".into());
             ui.set_note_category("General".into());
@@ -3244,6 +3484,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let session_keyfile = Arc::clone(&session_keyfile);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
+        let canvas_state = Arc::clone(&canvas_state);
 
         move |title, content, category| {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -3265,6 +3506,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let active_id = ui.get_active_note_id().to_string();
             let is_new = active_id.is_empty() || active_id == "new";
+            let note_type = NoteType::from(ui.get_active_note_type().as_str());
 
             let mut target_category = category.trim().to_string();
             if target_category.is_empty() {
@@ -3276,7 +3518,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let clean_title = title.trim();
             let title_str = if clean_title.is_empty() {
-                "Untitled Note".to_string()
+                if note_type == NoteType::Canvas {
+                    "Untitled Drawing".to_string()
+                } else {
+                    "Untitled Note".to_string()
+                }
             } else {
                 clean_title.to_string()
             };
@@ -3325,10 +3571,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = std::fs::create_dir_all(&category_dir);
 
             let (mut note, target_path, old_path_to_remove) = if is_new {
-                let new_note = Note::new(
+                let new_note = Note::new_with_type(
                     title_str.clone(),
                     parsed_tags.clone(),
                     content.to_string(),
+                    note_type,
                 );
 
                 let file_path = category_dir.join(format!("{}.vault", new_note.id));
@@ -3365,6 +3612,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         existing.tags = parsed_tags.clone();
                         existing.content = content.to_string();
                         existing.updated_at = now;
+                        existing.note_type = note_type;
                         existing
                     }
                     None => {
@@ -3377,6 +3625,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             content: content.to_string(),
                             created_at: now,
                             updated_at: now,
+                            note_type,
                         }
                     }
                 };
@@ -3386,10 +3635,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let saved_id = note.id.to_string();
             let updated_ts = note.updated_at;
+            let saved_note_type = note.note_type;
 
             if let Err(e) = save_note_encrypted(&note, &password, kf_bytes, &target_path) {
                 eprintln!("Error saving encrypted note to {:?}: {}", target_path, e);
                 return;
+            }
+
+            if saved_note_type == NoteType::Canvas {
+                let png_bytes = {
+                    let cstate = canvas_state.lock().unwrap();
+                    cstate.pixmap.as_ref().and_then(|p| p.encode_png().ok())
+                };
+                if let Some(png_bytes) = png_bytes {
+                    let canvas_path = get_canvas_path(&target_path);
+                    if let Err(e) = save_canvas_encrypted(&png_bytes, &password, kf_bytes, &canvas_path) {
+                        eprintln!("Error saving encrypted canvas to {:?}: {}", canvas_path, e);
+                    }
+                }
             }
 
             if let Some(old_file) = old_path_to_remove {
@@ -3413,6 +3676,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         date: formatted_date.clone(),
                         updated_at: updated_ts,
                         file_path: target_path.clone(),
+                        note_type: saved_note_type,
                     },
                 );
             }
@@ -3442,30 +3706,226 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------
     main_window.on_new_note_requested({
         let window_weak = window_weak.clone();
-        let active_folder = Arc::clone(&active_folder);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
             if ui.get_is_locked() {
                 return;
             }
-            let cur_folder = active_folder.lock().unwrap().clone();
-            if cur_folder == "*All Notes*" {
+            if ui.get_has_unsaved_changes() {
+                ui.set_pending_action_type("new_note".into());
+                ui.set_pending_action_payload("".into());
+                ui.set_show_unsaved_warning(true);
+            } else {
+                ui.set_show_new_note_modal(true);
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: New Note Type Selected from Modal
+    // -------------------------------------------------------------
+    main_window.on_new_note_type_selected({
+        let window_weak = window_weak.clone();
+        let active_folder = Arc::clone(&active_folder);
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |note_type_str| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() {
                 return;
             }
+            let cur_folder = active_folder.lock().unwrap().clone();
+            let folder_to_use = if cur_folder == "*All Notes*" {
+                "General".to_string()
+            } else {
+                cur_folder
+            };
+
             ui.set_active_note_id("new".into());
-            ui.set_note_title("Untitled Note".into());
-            ui.set_note_category(cur_folder.into());
+            ui.set_note_category(folder_to_use.into());
             ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_note_date("Just now".into());
-            ui.set_note_content("".into());
-            ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
-            ui.set_note_markdown_rendered(slint::StyledText::default());
-            ui.set_editor_markdown_mode(false);
-            ui.set_line_numbers_text("1".into());
             ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
             ui.set_attachment_count(0);
             ui.set_has_unsaved_changes(false);
+
+            if note_type_str.as_str() == "canvas" {
+                ui.set_active_note_type("canvas".into());
+                ui.set_note_title("Untitled Drawing".into());
+                ui.set_note_content("".into());
+                ui.set_editor_markdown_mode(false);
+                ui.set_canvas_tool("pen".into());
+
+                let mut pixmap = tiny_skia::Pixmap::new(1600, 1200).expect("failed to allocate canvas pixmap");
+                pixmap.fill(tiny_skia::Color::TRANSPARENT);
+                let img = pixmap_to_slint_image(&pixmap);
+                ui.set_canvas_image(img);
+
+                let c = ui.get_canvas_color();
+                let sw = ui.get_canvas_stroke_width();
+                let ls = ui.get_canvas_line_style().to_string();
+                let mut cstate = canvas_state.lock().unwrap();
+                cstate.pixmap = Some(pixmap);
+                cstate.last_point = None;
+                cstate.dash_offset = 0.0;
+                cstate.tool = "pen".to_string();
+                cstate.color = tiny_skia::Color::from_rgba8(c.red(), c.green(), c.blue(), c.alpha());
+                cstate.stroke_width = sw;
+                cstate.line_style = ls;
+            } else {
+                ui.set_active_note_type("text".into());
+                ui.set_note_title("Untitled Note".into());
+                ui.set_note_content("".into());
+                ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
+                ui.set_note_markdown_rendered(slint::StyledText::default());
+                ui.set_editor_markdown_mode(false);
+                ui.set_line_numbers_text("1".into());
+
+                let mut cstate = canvas_state.lock().unwrap();
+                cstate.pixmap = None;
+                cstate.last_point = None;
+                ui.set_canvas_image(slint::Image::default());
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callbacks: Canvas Drawing & Pointer Events
+    // -------------------------------------------------------------
+    main_window.on_canvas_pointer_down({
+        let window_weak = window_weak.clone();
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |x, y| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let mut cstate = canvas_state.lock().unwrap();
+            cstate.last_point = Some((x, y));
+            cstate.dash_offset = 0.0;
+
+            let tool = cstate.tool.clone();
+            let color = cstate.color;
+            let stroke_width = cstate.stroke_width;
+            let line_style = cstate.line_style.clone();
+
+            if let Some(pixmap) = cstate.pixmap.as_mut() {
+                draw_stroke_on_pixmap(pixmap, (x, y), (x, y), &tool, color, stroke_width, &line_style, 0.0);
+                let img = pixmap_to_slint_image(pixmap);
+                ui.set_canvas_image(img);
+                ui.set_has_unsaved_changes(true);
+            }
+        }
+    });
+
+    main_window.on_canvas_pointer_move({
+        let window_weak = window_weak.clone();
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |x, y| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let mut cstate = canvas_state.lock().unwrap();
+            let from = cstate.last_point.unwrap_or((x, y));
+            cstate.last_point = Some((x, y));
+
+            let tool = cstate.tool.clone();
+            let color = cstate.color;
+            let stroke_width = cstate.stroke_width;
+            let line_style = cstate.line_style.clone();
+            let current_dash_offset = cstate.dash_offset;
+
+            let dist = ((x - from.0).powi(2) + (y - from.1).powi(2)).sqrt();
+            let cycle = get_dash_cycle(&line_style, stroke_width);
+            cstate.dash_offset = (current_dash_offset + dist) % cycle;
+
+            if let Some(pixmap) = cstate.pixmap.as_mut() {
+                draw_stroke_on_pixmap(pixmap, from, (x, y), &tool, color, stroke_width, &line_style, current_dash_offset);
+                let img = pixmap_to_slint_image(pixmap);
+                ui.set_canvas_image(img);
+                ui.set_has_unsaved_changes(true);
+            }
+        }
+    });
+
+    main_window.on_canvas_pointer_up({
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |_x, _y| {
+            let mut cstate = canvas_state.lock().unwrap();
+            cstate.last_point = None;
+        }
+    });
+
+    main_window.on_canvas_tool_changed({
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |tool_str| {
+            let mut cstate = canvas_state.lock().unwrap();
+            cstate.tool = tool_str.to_string();
+        }
+    });
+
+    main_window.on_canvas_color_changed({
+        let window_weak = window_weak.clone();
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |color_hex| {
+            let color_str = color_hex.as_str();
+            if let Some(ui) = window_weak.upgrade() {
+                if let Some((r, g, b)) = parse_hex_rgb(color_str) {
+                    ui.set_canvas_color(slint::Color::from_argb_u8(255, r, g, b));
+                    ui.set_custom_color_preview(slint::Color::from_argb_u8(255, r, g, b));
+                    ui.set_custom_color_hex(color_hex.clone());
+                }
+            }
+            let mut cstate = canvas_state.lock().unwrap();
+            cstate.color = parse_hex_color(color_str);
+        }
+    });
+
+    main_window.on_canvas_stroke_width_changed({
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |width| {
+            let mut cstate = canvas_state.lock().unwrap();
+            cstate.stroke_width = width.max(1.0);
+        }
+    });
+
+    main_window.on_canvas_line_style_changed({
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |style_str| {
+            let mut cstate = canvas_state.lock().unwrap();
+            cstate.line_style = style_str.to_string();
+            cstate.dash_offset = 0.0;
+        }
+    });
+
+    main_window.on_custom_color_preview_requested({
+        let window_weak = window_weak.clone();
+
+        move |hex| {
+            if let Some(ui) = window_weak.upgrade() {
+                if let Some((r, g, b)) = parse_hex_rgb(hex.as_str()) {
+                    ui.set_custom_color_preview(slint::Color::from_argb_u8(255, r, g, b));
+                }
+            }
+        }
+    });
+
+    main_window.on_canvas_clear_requested({
+        let window_weak = window_weak.clone();
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let mut cstate = canvas_state.lock().unwrap();
+            if let Some(pixmap) = cstate.pixmap.as_mut() {
+                pixmap.fill(tiny_skia::Color::TRANSPARENT);
+                let img = pixmap_to_slint_image(pixmap);
+                ui.set_canvas_image(img);
+                ui.set_has_unsaved_changes(true);
+            }
         }
     });
 
@@ -3883,6 +4343,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let vault_path = Arc::clone(&vault_path);
         let active_folder = Arc::clone(&active_folder);
         let search_query = Arc::clone(&search_query);
+        let canvas_state = Arc::clone(&canvas_state);
 
         move || {
             let Some(ui) = window_weak.upgrade() else { return };
@@ -3915,17 +4376,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let category_dir = current_vault.join(&cat);
                 let _ = std::fs::create_dir_all(&category_dir);
 
+                let note_type = NoteType::from(ui.get_active_note_type().as_str());
                 let title_str = ui.get_note_title().trim().to_string();
-                let title = if title_str.is_empty() { "Untitled Note".to_string() } else { title_str };
+                let title = if title_str.is_empty() {
+                    if note_type == NoteType::Canvas {
+                        "Untitled Drawing".to_string()
+                    } else {
+                        "Untitled Note".to_string()
+                    }
+                } else {
+                    title_str
+                };
                 let content = ui.get_note_content().to_string();
                 let tags: Vec<String> = ui.get_note_tags().iter().map(|s| s.to_string()).collect();
 
-                let new_note = Note::new(title.clone(), tags.clone(), content);
+                let new_note = Note::new_with_type(title.clone(), tags.clone(), content, note_type);
                 let file_path = category_dir.join(format!("{}.vault", new_note.id));
                 if let Err(e) = save_note_encrypted(&new_note, &password, kf_bytes, &file_path) {
                     eprintln!("Failed to save new note before adding attachment: {}", e);
                     return;
                 }
+
+                if new_note.note_type == NoteType::Canvas {
+                    let png_bytes = {
+                        let cstate = canvas_state.lock().unwrap();
+                        cstate.pixmap.as_ref().and_then(|p| p.encode_png().ok())
+                    };
+                    if let Some(png_bytes) = png_bytes {
+                        let canvas_path = get_canvas_path(&file_path);
+                        if let Err(e) = save_canvas_encrypted(&png_bytes, &password, kf_bytes, &canvas_path) {
+                            eprintln!("Error saving encrypted canvas to {:?}: {}", canvas_path, e);
+                        }
+                    }
+                }
+
                 let new_id_str = new_note.id.to_string();
                 let now = new_note.updated_at;
                 let formatted_date = format_unix_timestamp(now);
@@ -3939,6 +4423,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         date: formatted_date.clone(),
                         updated_at: now,
                         file_path: file_path.clone(),
+                        note_type,
                     },
                 );
 

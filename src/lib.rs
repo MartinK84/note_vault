@@ -97,6 +97,73 @@ impl From<serde_json::Error> for VaultError {
     }
 }
 
+/// Note type classification: standard markdown text or tiny-skia drawing canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NoteType {
+    #[default]
+    Text,
+    Canvas,
+}
+
+impl NoteType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NoteType::Text => "text",
+            NoteType::Canvas => "canvas",
+        }
+    }
+}
+
+impl fmt::Display for NoteType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<&str> for NoteType {
+    fn from(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "canvas" => NoteType::Canvas,
+            _ => NoteType::Text,
+        }
+    }
+}
+
+impl Serialize for NoteType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NoteType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct NoteTypeVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for NoteTypeVisitor {
+            type Value = NoteType;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string representing a note type ('text' or 'canvas')")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<NoteType, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(NoteType::from(value))
+            }
+        }
+
+        deserializer.deserialize_str(NoteTypeVisitor)
+    }
+}
+
 /// Represents a single Note in the vault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
@@ -106,6 +173,8 @@ pub struct Note {
     pub content: String,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub note_type: NoteType,
 }
 
 impl Note {
@@ -114,6 +183,16 @@ impl Note {
         title: impl Into<String>,
         tags: Vec<String>,
         content: impl Into<String>,
+    ) -> Self {
+        Self::new_with_type(title, tags, content, NoteType::Text)
+    }
+
+    /// Constructs a new Note with a specified NoteType.
+    pub fn new_with_type(
+        title: impl Into<String>,
+        tags: Vec<String>,
+        content: impl Into<String>,
+        note_type: NoteType,
     ) -> Self {
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -127,7 +206,16 @@ impl Note {
             content: content.into(),
             created_at,
             updated_at: created_at,
+            note_type,
         }
+    }
+
+    /// Constructs a new Canvas note.
+    pub fn new_canvas(
+        title: impl Into<String>,
+        tags: Vec<String>,
+    ) -> Self {
+        Self::new_with_type(title, tags, "", NoteType::Canvas)
     }
 }
 
@@ -139,6 +227,7 @@ impl Zeroize for Note {
         self.created_at.zeroize();
         self.updated_at.zeroize();
         self.id = Uuid::nil();
+        self.note_type = NoteType::Text;
     }
 }
 

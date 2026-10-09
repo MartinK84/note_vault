@@ -15,6 +15,7 @@ fn test_filter_quick_search_results() {
                 date: "2026-01-01".to_string(),
                 updated_at: i * 100,
                 file_path: PathBuf::from(format!("/vault/note-{}.vault", i)),
+                note_type: NoteType::Text,
             },
         );
     }
@@ -168,6 +169,7 @@ fn test_get_suggested_tags_aggregation_and_counts() {
             date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
+            note_type: NoteType::Text,
         },
     );
 
@@ -180,6 +182,7 @@ fn test_get_suggested_tags_aggregation_and_counts() {
             date: "2026-01-02".to_string(),
             updated_at: 200,
             file_path: PathBuf::from("/vault/note-2.vault"),
+            note_type: NoteType::Text,
         },
     );
 
@@ -192,6 +195,7 @@ fn test_get_suggested_tags_aggregation_and_counts() {
             date: "2026-01-03".to_string(),
             updated_at: 300,
             file_path: PathBuf::from("/vault/note-3.vault"),
+            note_type: NoteType::Text,
         },
     );
 
@@ -227,6 +231,7 @@ fn test_get_suggested_tags_case_insensitive_exclusion() {
             date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
+            note_type: NoteType::Text,
         },
     );
 
@@ -251,6 +256,7 @@ fn test_get_suggested_tags_query_filtering() {
             date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
+            note_type: NoteType::Text,
         },
     );
 
@@ -281,6 +287,7 @@ fn test_get_suggested_tags_deduplication_and_whitespace() {
             date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
+            note_type: NoteType::Text,
         },
     );
 
