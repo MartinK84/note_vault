@@ -518,3 +518,58 @@ fn test_save_current_note_triggers_save_callback() {
         assert_eq!(*saved_category.lock().unwrap(), "Work");
     }
 }
+
+#[test]
+fn test_exit_confirmation_modal_state_and_callback() {
+    if let Ok(ui) = MainWindow::new() {
+        // Initial state must be false
+        assert!(!ui.get_show_exit_confirm_modal(), "Exit confirm modal must initially be hidden");
+
+        // Set state to true (e.g. on window close request or exit menu clicked)
+        ui.set_show_exit_confirm_modal(true);
+        assert!(ui.get_show_exit_confirm_modal(), "Exit confirm modal must be visible after close/exit request");
+
+        // Cancel should hide modal
+        ui.set_show_exit_confirm_modal(false);
+        assert!(!ui.get_show_exit_confirm_modal(), "Exit confirm modal must be hidden on cancel");
+
+        // Test exit_confirmed callback registration
+        let exit_confirmed = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&exit_confirmed);
+        ui.on_exit_confirmed(move || {
+            flag.store(true, Ordering::Relaxed);
+        });
+
+        // Set state again and verify
+        ui.set_show_exit_confirm_modal(true);
+        assert!(ui.get_show_exit_confirm_modal());
+    }
+}
+
+#[test]
+fn test_save_current_note_blocked_when_exit_confirm_modal_open() {
+    if let Ok(ui) = MainWindow::new() {
+        let saved_called = Arc::new(AtomicBool::new(false));
+        let sc = Arc::clone(&saved_called);
+        ui.on_save_note_requested(move |_title, _content, _category| {
+            sc.store(true, Ordering::Relaxed);
+        });
+
+        // Setup active note
+        ui.set_is_locked(false);
+        ui.set_active_note_id("note-exit-test".into());
+        ui.set_note_title("Exit Test Title".into());
+        ui.set_note_content("Exit test content".into());
+        ui.set_note_category("General".into());
+
+        // When modal is open, saving must be suppressed
+        ui.set_show_exit_confirm_modal(true);
+        ui.invoke_save_current_note();
+        assert!(!saved_called.load(Ordering::Relaxed), "Save note must not trigger while exit confirmation modal is open");
+
+        // When modal is closed, saving proceeds
+        ui.set_show_exit_confirm_modal(false);
+        ui.invoke_save_current_note();
+        assert!(saved_called.load(Ordering::Relaxed), "Save note must trigger when exit confirmation modal is closed");
+    }
+}

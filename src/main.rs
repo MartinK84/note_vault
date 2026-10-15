@@ -1677,15 +1677,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Close requests always quit the application cleanly (even if minimize to tray is enabled)
+    // Close requests prompt user for confirmation before exiting
     main_window.window().on_close_requested({
         let window_weak = window_weak.clone();
         move || {
             if let Some(ui) = window_weak.upgrade() {
-                let _ = ui.hide();
+                ui.set_show_exit_confirm_modal(true);
             }
-            let _ = slint::quit_event_loop();
-            std::process::exit(0);
+            slint::CloseRequestResponse::KeepWindowShown
         }
     });
 
@@ -2858,8 +2857,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let window_weak = window_weak.clone();
         move || {
             if let Some(ui) = window_weak.upgrade() {
+                ui.set_show_exit_confirm_modal(true);
+            }
+        }
+    });
+
+    // -------------------------------------------------------------
+    // Callback: Exit Confirmed
+    // -------------------------------------------------------------
+    main_window.on_exit_confirmed({
+        let window_weak = window_weak.clone();
+        move || {
+            if let Some(ui) = window_weak.upgrade() {
                 let _ = ui.hide();
             }
+            let _ = slint::quit_event_loop();
             std::process::exit(0);
         }
     });

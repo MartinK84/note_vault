@@ -18,7 +18,8 @@ import {
     WarningModal,
     NewNoteModal,
     ClearCanvasModal,
-    CustomColorModal
+    CustomColorModal,
+    ExitConfirmModal
 } from "modals.slint";
 import { SettingsDialog } from "settings.slint";
 import { QuickSearchWindow, QuickSearchResult } from "quick_search.slint";
@@ -240,6 +241,7 @@ export component MainWindow inherits Window {
     in-out property <bool> show_new_note_modal: false;
     in-out property <bool> show_clear_canvas_modal: false;
     in-out property <bool> show_custom_color_modal: false;
+    in-out property <bool> show_exit_confirm_modal: false;
     in-out property <string> custom_color_hex: "#1e1e1e";
     in-out property <color> custom_color_preview: #1e1e1e;
     in-out property <float> custom_color_hue: 0.0;
@@ -308,6 +310,7 @@ export component MainWindow inherits Window {
     callback update_keyfile_requested(string, string, bool); // current, new_path, remove
     callback welcome_open_vault_requested(string);
     callback exit_requested();
+    callback exit_confirmed();
     callback theme_changed(string);
     callback record_hotkey_requested(string, bool, bool, bool, bool) -> string;
 
@@ -338,7 +341,8 @@ export component MainWindow inherits Window {
             && !root.show_move_note_modal
             && !root.show_add_tag_modal
             && !root.show_welcome_modal
-            && !root.show_unsaved_warning {
+            && !root.show_unsaved_warning
+            && !root.show_exit_confirm_modal {
             root.save_note_requested(
                 root.note_title,
                 root.note_content,
@@ -370,6 +374,10 @@ export component MainWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(event) => {
+            if root.show_exit_confirm_modal && event.text == Key.Escape {
+                root.show_exit_confirm_modal = false;
+                return accept;
+            }
             if root.show_attachment_preview_modal && event.text == Key.Escape {
                 root.show_attachment_preview_modal = false;
                 return accept;
@@ -386,6 +394,10 @@ export component MainWindow inherits Window {
         }
 
         key-pressed(event) => {
+            if root.show_exit_confirm_modal && event.text == Key.Escape {
+                root.show_exit_confirm_modal = false;
+                return accept;
+            }
             if root.show_attachment_preview_modal && event.text == Key.Escape {
                 root.show_attachment_preview_modal = false;
                 return accept;
@@ -563,6 +575,7 @@ export component MainWindow inherits Window {
                                             exit_item_touch := TouchArea {
                                                 clicked => {
                                                     file_popup.close();
+                                                    root.show_exit_confirm_modal = true;
                                                     root.exit_requested();
                                                 }
                                             }
@@ -4357,6 +4370,17 @@ export component MainWindow inherits Window {
         }
         close => {
             root.show_custom_color_modal = false;
+        }
+    }
+
+    if root.show_exit_confirm_modal : ExitConfirmModal {
+        has_unsaved_changes: root.has_unsaved_changes;
+        cancel => {
+            root.show_exit_confirm_modal = false;
+        }
+        exit => {
+            root.show_exit_confirm_modal = false;
+            root.exit_confirmed();
         }
     }
 }

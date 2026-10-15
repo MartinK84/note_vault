@@ -3046,4 +3046,109 @@ export component CustomColorModal inherits Rectangle {
     }
 }
 
+// ==========================================
+// MODAL: EXIT CONFIRMATION
+// ==========================================
+export component ExitConfirmModal inherits Rectangle {
+    x: 0px;
+    y: 0px;
+    width: 100%;
+    height: 100%;
+    background: Theme.overlay;
+
+    in property <bool> has_unsaved_changes: false;
+    callback cancel();
+    callback exit();
+
+    TouchArea {}
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 400px;
+        height: content_layout.preferred-height;
+        background: Theme.bg_surface;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.border_active;
+        clip: true;
+
+        content_layout := VerticalLayout {
+            padding-top: 14px;
+            padding-bottom: 14px;
+            padding-left: 20px;
+            padding-right: 20px;
+            spacing: 12px;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                cross-axis-alignment: center;
+
+                Image {
+                    source: @image-url("../assets/icons/alert-triangle.svg");
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.accent;
+                }
+
+                Text {
+                    text: "Exit NoteVault";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text_primary;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: "Are you sure you want to exit?";
+                font-size: 13px;
+                color: Theme.text_primary;
+                horizontal-alignment: left;
+                wrap: word-wrap;
+            }
+
+            if root.has_unsaved_changes : Text {
+                text: "Any unsaved changes will be lost.";
+                font-size: 11px;
+                color: Theme.danger;
+                horizontal-alignment: left;
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Button {
+                    height: 28px;
+                    text: "Cancel";
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+
+                Button {
+                    height: 28px;
+                    text: "Exit";
+                    primary: true;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        root.exit();
+                    }
+                }
+            }
+        }
+
+        ModalCloseButton {
+            x: parent.width - self.width - 12px;
+            y: 12px;
+            clicked => {
+                root.cancel();
+            }
+        }
+    }
+}
+
 
