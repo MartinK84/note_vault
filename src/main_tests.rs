@@ -573,3 +573,50 @@ fn test_save_current_note_blocked_when_exit_confirm_modal_open() {
         assert!(saved_called.load(Ordering::Relaxed), "Save note must trigger when exit confirmation modal is closed");
     }
 }
+
+#[test]
+fn test_pen_button_and_palm_suppression_helpers() {
+    use std::time::{Duration, Instant};
+
+    // Primary tip with no barrel/eraser flags maps to Left (draw)
+    assert_eq!(determine_pen_button(0x0001_0014, 0), PenMouseButton::Left);
+
+    // Secondary button or eraser/inverted/barrel flags map to Right (erase)
+    assert_eq!(determine_pen_button(PEN_POINTER_FLAG_SECONDBUTTON, 0), PenMouseButton::Right);
+    assert_eq!(determine_pen_button(0, PEN_FLAG_ERASER_BIT), PenMouseButton::Right);
+    assert_eq!(determine_pen_button(0, PEN_FLAG_INVERTED_BIT), PenMouseButton::Right);
+    assert_eq!(determine_pen_button(0, PEN_FLAG_BARREL_BIT), PenMouseButton::Right);
+
+    // LPARAM packing preserves signed 16-bit client coordinates (including negative values)
+    let lp_pos = pack_client_lparam(320, 240);
+    assert_eq!((lp_pos & 0xFFFF) as i16, 320);
+    assert_eq!(((lp_pos >> 16) & 0xFFFF) as i16, 240);
+
+    let lp_neg = pack_client_lparam(-12, -5);
+    assert_eq!((lp_neg & 0xFFFF) as i16, -12);
+    assert_eq!(((lp_neg >> 16) & 0xFFFF) as i16, -5);
+
+    // Mouse WPARAM flags
+    assert_eq!(build_mouse_wparam(false, false, None), 0);
+    assert_eq!(build_mouse_wparam(true, true, Some(PenMouseButton::Left)), 0x0001 | 0x0004 | 0x0008);
+    assert_eq!(build_mouse_wparam(false, true, Some(PenMouseButton::Right)), 0x0002 | 0x0004);
+
+    // Palm suppression while pen is in range or within cooldown
+    let now = Instant::now();
+    assert!(should_suppress_touch_for_pen(true, None, now));
+    assert!(should_suppress_touch_for_pen(false, Some(now - Duration::from_millis(200)), now));
+    assert!(!should_suppress_touch_for_pen(false, Some(now - Duration::from_millis(800)), now));
+    assert!(!should_suppress_touch_for_pen(false, None, now));
+}
+
+#[test]
+fn test_unlock_window_and_main_window_focus_helpers() {
+    if let Ok(uw) = UnlockWindow::new() {
+        uw.invoke_focus_password();
+    }
+    if let Ok(ui) = MainWindow::new() {
+        let before = ui.get_unlock_focus_trigger();
+        ui.invoke_focus_unlock_password();
+        assert_eq!(ui.get_unlock_focus_trigger(), before + 1);
+    }
+}

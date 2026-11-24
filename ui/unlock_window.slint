@@ -23,6 +23,7 @@ export component UnlockWindow inherits Window {
     callback close_requested();
 
     public function focus_password() {
+        fs.focus();
         pwd_input.focus();
     }
 
@@ -42,7 +43,7 @@ export component UnlockWindow inherits Window {
         Palette.color-scheme = Theme.is_dark ? ColorScheme.dark : ColorScheme.light;
     }
 
-    FocusScope {
+    fs := FocusScope {
         width: 100%;
         height: 100%;
         capture-key-pressed(event) => {

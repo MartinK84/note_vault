@@ -96,7 +96,12 @@ export component MainWindow inherits Window {
     // --- State Properties ---
     in-out property <bool> is_locked: true;
     in-out property <bool> show_unlock_modal: true;
+    in-out property <int> unlock_focus_trigger: 0;
     in-out property <bool> is_loading: false;
+
+    public function focus_unlock_password() {
+        root.unlock_focus_trigger += 1;
+    }
     in-out property <float> loading_progress: 0.0;
     in-out property <string> loading_status_text: "";
     in-out property <string> unlock_password: "";
@@ -4230,6 +4235,7 @@ export component MainWindow inherits Window {
         password <=> root.unlock_password;
         error_message: root.unlock_error_message;
         show_keyfile_browse: root.show_keyfile_browse;
+        focus_trigger: root.unlock_focus_trigger;
         unlock(pwd) => {
             root.unlock_requested(pwd);
         }

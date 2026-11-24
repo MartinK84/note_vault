@@ -38,9 +38,18 @@ export component UnlockModal inherits Rectangle {
     in-out property <string> password: "";
     in property <string> error_message: "";
     in property <bool> show_keyfile_browse: false;
+    in property <int> focus_trigger: 0;
     callback unlock(string);
     callback browse_keyfile();
     callback close();
+
+    init => {
+        pwd_input.focus();
+    }
+
+    changed focus_trigger => {
+        pwd_input.focus();
+    }
 
     TouchArea {}
 
