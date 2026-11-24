@@ -323,6 +323,7 @@ export component MainWindow inherits Window {
     callback unlock_requested(string);
     callback lock_vault();
     callback save_note_requested(string, string, string); // title, content, category
+    callback cancel_note_edits_requested();
     callback select_note_requested(string); // note_id
     callback discard_changes_confirmed();
     callback rescan_vault_requested();
@@ -1737,8 +1738,71 @@ export component MainWindow inherits Window {
                                 }
                             }
 
+                            cancel_btn := Rectangle {
+                                height: 28px;
+                                width: max(82px, cancel_layout.preferred-width);
+                                horizontal-stretch: 0;
+                                border-radius: 6px;
+                                border-width: 1px;
+                                border-color: root.has_unsaved_changes ? Theme.border_active : Theme.border;
+                                background: root.has_unsaved_changes
+                                    ? (cancel_touch.has-hover ? Theme.hover : Theme.bg_secondary)
+                                    : Theme.bg_secondary;
+                                opacity: root.has_unsaved_changes ? 1.0 : 0.55;
+                                animate background { duration: 150ms; }
+
+                                cancel_touch := TouchArea {
+                                    mouse-cursor: root.has_unsaved_changes ? pointer : default;
+                                    clicked => {
+                                        if root.has_unsaved_changes {
+                                            root.cancel_note_edits_requested();
+                                        }
+                                    }
+                                }
+
+                                cancel_layout := HorizontalLayout {
+                                    x: 0px;
+                                    y: 0px;
+                                    width: 100%;
+                                    height: 100%;
+                                    padding-left: 12px;
+                                    padding-right: 12px;
+                                    padding-top: 0px;
+                                    padding-bottom: 0px;
+                                    spacing: 6px;
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+
+                                    Image {
+                                        source: @image-url("../assets/icons/x.svg");
+                                        width: 12px;
+                                        height: 12px;
+                                        colorize: root.has_unsaved_changes ? Theme.text_primary : Theme.text_muted;
+                                    }
+
+                                    Text {
+                                        text: "Cancel";
+                                        font-size: 13px;
+                                        font-weight: 500;
+                                        height: 100%;
+                                        color: root.has_unsaved_changes ? Theme.text_primary : Theme.text_muted;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                TooltipBubble {
+                                    text: "Discard unsaved edits and revert to original note";
+                                    show: cancel_touch.has-hover && root.has_unsaved_changes;
+                                    x: parent.width - self.width;
+                                    y: parent.height + 4px;
+                                }
+                            }
+
                             save_btn := Rectangle {
                                 height: 28px;
+                                width: max(78px, save_layout.preferred-width);
+                                horizontal-stretch: 0;
                                 border-radius: 6px;
                                 background: root.has_unsaved_changes
                                     ? (save_touch.has-hover ? Theme.danger_hover : Theme.danger)
@@ -1752,9 +1816,15 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                HorizontalLayout {
+                                save_layout := HorizontalLayout {
+                                    x: 0px;
+                                    y: 0px;
+                                    width: 100%;
+                                    height: 100%;
                                     padding-left: 12px;
                                     padding-right: 12px;
+                                    padding-top: 0px;
+                                    padding-bottom: 0px;
                                     spacing: 6px;
                                     alignment: center;
                                     cross-axis-alignment: center;
@@ -1770,7 +1840,9 @@ export component MainWindow inherits Window {
                                         text: "Save";
                                         font-size: 13px;
                                         font-weight: 600;
+                                        height: 100%;
                                         color: root.has_unsaved_changes ? Theme.danger_text : Theme.text_secondary;
+                                        horizontal-alignment: center;
                                         vertical-alignment: center;
                                     }
                                 }

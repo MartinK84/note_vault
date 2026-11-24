@@ -620,3 +620,40 @@ fn test_unlock_window_and_main_window_focus_helpers() {
         assert_eq!(ui.get_unlock_focus_trigger(), before + 1);
     }
 }
+
+#[test]
+fn test_init_blank_new_note_resets_text_and_canvas_state() {
+    if let Ok(ui) = MainWindow::new() {
+        let canvas_state = Arc::new(Mutex::new(ActiveCanvasState::default()));
+
+        // Dirty text state -> init_blank_new_note_in_ui resets all fields
+        ui.set_note_title("Modified Title".into());
+        ui.set_note_content("Modified body".into());
+        ui.set_has_unsaved_changes(true);
+        init_blank_new_note_in_ui(&ui, "text", "Work", &canvas_state);
+        assert_eq!(ui.get_active_note_id().as_str(), "new");
+        assert_eq!(ui.get_active_note_type().as_str(), "text");
+        assert_eq!(ui.get_note_title().as_str(), "Untitled Note");
+        assert_eq!(ui.get_note_content().as_str(), "");
+        assert!(!ui.get_has_unsaved_changes());
+        assert!(canvas_state.lock().unwrap().pixmap.is_none());
+
+        // Dirty canvas state -> init_blank_new_note_in_ui resets dimensions, bg, and pixmap
+        ui.set_canvas_width(1400.0);
+        ui.set_canvas_height(1000.0);
+        ui.set_canvas_bg_color_hex("#123456".into());
+        ui.set_has_unsaved_changes(true);
+        init_blank_new_note_in_ui(&ui, "canvas", "General", &canvas_state);
+        assert_eq!(ui.get_active_note_id().as_str(), "new");
+        assert_eq!(ui.get_active_note_type().as_str(), "canvas");
+        assert_eq!(ui.get_note_title().as_str(), "Untitled Drawing");
+        assert_eq!(ui.get_canvas_width(), DEFAULT_CANVAS_WIDTH as f32);
+        assert_eq!(ui.get_canvas_height(), DEFAULT_CANVAS_HEIGHT as f32);
+        assert_eq!(ui.get_canvas_bg_color_hex().as_str(), DEFAULT_CANVAS_BG_HEX);
+        assert!(!ui.get_has_unsaved_changes());
+        let guard = canvas_state.lock().unwrap();
+        let pix = guard.pixmap.as_ref().expect("canvas pixmap initialized");
+        assert_eq!(pix.width(), DEFAULT_CANVAS_WIDTH);
+        assert_eq!(pix.height(), DEFAULT_CANVAS_HEIGHT);
+    }
+}

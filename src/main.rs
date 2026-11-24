@@ -2099,6 +2099,69 @@ fn load_note_into_ui(
     }
 }
 
+/// Initializes the editor pane with a clean, unsaved `"new"` text or canvas note.
+fn init_blank_new_note_in_ui(
+    ui: &MainWindow,
+    note_type_str: &str,
+    folder_to_use: &str,
+    canvas_state: &Arc<Mutex<ActiveCanvasState>>,
+) {
+    ui.set_active_note_id("new".into());
+    ui.set_note_category(folder_to_use.into());
+    ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
+    ui.set_note_date("Just now".into());
+    ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
+    ui.set_attachment_count(0);
+    ui.set_has_unsaved_changes(false);
+
+    if note_type_str.eq_ignore_ascii_case("canvas") {
+        ui.set_active_note_type("canvas".into());
+        ui.set_note_title("Untitled Drawing".into());
+        ui.set_note_content("".into());
+        ui.set_editor_markdown_mode(false);
+        ui.set_canvas_tool("pen".into());
+        ui.set_canvas_zoom_percent(100);
+        ui.set_canvas_zoom_text("100%".into());
+        ui.set_canvas_pan_x(0.0);
+        ui.set_canvas_pan_y(0.0);
+        ui.set_canvas_width(DEFAULT_CANVAS_WIDTH as f32);
+        ui.set_canvas_height(DEFAULT_CANVAS_HEIGHT as f32);
+        ui.set_canvas_bg_color_hex(DEFAULT_CANVAS_BG_HEX.into());
+        ui.set_canvas_bg_color(slint::Color::from_argb_u8(255, 255, 255, 255));
+
+        let mut pixmap = tiny_skia::Pixmap::new(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT)
+            .expect("failed to allocate canvas pixmap");
+        pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        let img = pixmap_to_slint_image(&pixmap);
+        ui.set_canvas_image(img);
+
+        let c = ui.get_canvas_color();
+        let sw = ui.get_canvas_stroke_width();
+        let ls = ui.get_canvas_line_style().to_string();
+        let mut cstate = canvas_state.lock().unwrap();
+        cstate.pixmap = Some(pixmap);
+        cstate.last_point = None;
+        cstate.dash_offset = 0.0;
+        cstate.tool = "pen".to_string();
+        cstate.color = tiny_skia::Color::from_rgba8(c.red(), c.green(), c.blue(), c.alpha());
+        cstate.stroke_width = sw;
+        cstate.line_style = ls;
+    } else {
+        ui.set_active_note_type("text".into());
+        ui.set_note_title("Untitled Note".into());
+        ui.set_note_content("".into());
+        ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
+        ui.set_note_markdown_rendered(slint::StyledText::default());
+        ui.set_editor_markdown_mode(false);
+        ui.set_line_numbers_text("1".into());
+
+        let mut cstate = canvas_state.lock().unwrap();
+        cstate.pixmap = None;
+        cstate.last_point = None;
+        ui.set_canvas_image(slint::Image::default());
+    }
+}
+
 /// Reloads and re-decrypts all notes in the vault,
 /// respecting `use_multithreading` (parallel with Rayon or sequential).
 fn trigger_vault_reload(
@@ -4563,59 +4626,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cur_folder
             };
 
-            ui.set_active_note_id("new".into());
-            ui.set_note_category(folder_to_use.into());
-            ui.set_note_tags(std::rc::Rc::new(slint::VecModel::default()).into());
-            ui.set_note_date("Just now".into());
-            ui.set_note_attachments(std::rc::Rc::new(slint::VecModel::default()).into());
-            ui.set_attachment_count(0);
-            ui.set_has_unsaved_changes(false);
+            init_blank_new_note_in_ui(&ui, note_type_str.as_str(), &folder_to_use, &canvas_state);
+        }
+    });
 
-            if note_type_str.as_str() == "canvas" {
-                ui.set_active_note_type("canvas".into());
-                ui.set_note_title("Untitled Drawing".into());
-                ui.set_note_content("".into());
-                ui.set_editor_markdown_mode(false);
-                ui.set_canvas_tool("pen".into());
-                ui.set_canvas_zoom_percent(100);
-                ui.set_canvas_zoom_text("100%".into());
-                ui.set_canvas_pan_x(0.0);
-                ui.set_canvas_pan_y(0.0);
-                ui.set_canvas_width(DEFAULT_CANVAS_WIDTH as f32);
-                ui.set_canvas_height(DEFAULT_CANVAS_HEIGHT as f32);
-                ui.set_canvas_bg_color_hex(DEFAULT_CANVAS_BG_HEX.into());
-                ui.set_canvas_bg_color(slint::Color::from_argb_u8(255, 255, 255, 255));
+    // -------------------------------------------------------------
+    // Callback: Cancel Unsaved Edits (Revert to Saved / Initial Note)
+    // -------------------------------------------------------------
+    main_window.on_cancel_note_edits_requested({
+        let window_weak = window_weak.clone();
+        let metadata_store = Arc::clone(&metadata_store);
+        let session_password = Arc::clone(&session_password);
+        let session_keyfile = Arc::clone(&session_keyfile);
+        let canvas_state = Arc::clone(&canvas_state);
 
-                let mut pixmap = tiny_skia::Pixmap::new(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT)
-                    .expect("failed to allocate canvas pixmap");
-                pixmap.fill(tiny_skia::Color::TRANSPARENT);
-                let img = pixmap_to_slint_image(&pixmap);
-                ui.set_canvas_image(img);
+        move || {
+            let Some(ui) = window_weak.upgrade() else { return };
+            if ui.get_is_locked() || !ui.get_has_unsaved_changes() {
+                return;
+            }
+            let active_id = ui.get_active_note_id().to_string();
+            if active_id.is_empty() {
+                return;
+            }
 
-                let c = ui.get_canvas_color();
-                let sw = ui.get_canvas_stroke_width();
-                let ls = ui.get_canvas_line_style().to_string();
-                let mut cstate = canvas_state.lock().unwrap();
-                cstate.pixmap = Some(pixmap);
-                cstate.last_point = None;
-                cstate.dash_offset = 0.0;
-                cstate.tool = "pen".to_string();
-                cstate.color = tiny_skia::Color::from_rgba8(c.red(), c.green(), c.blue(), c.alpha());
-                cstate.stroke_width = sw;
-                cstate.line_style = ls;
+            if active_id == "new" {
+                let cur_type = ui.get_active_note_type().to_string();
+                let cur_cat = ui.get_note_category().to_string();
+                let folder = if cur_cat.is_empty() { "General" } else { cur_cat.as_str() };
+                init_blank_new_note_in_ui(&ui, &cur_type, folder, &canvas_state);
+                ui.set_vault_status_text("Discarded unsaved edits".into());
             } else {
-                ui.set_active_note_type("text".into());
-                ui.set_note_title("Untitled Note".into());
-                ui.set_note_content("".into());
-                ui.set_note_markdown_blocks(std::rc::Rc::new(slint::VecModel::default()).into());
-                ui.set_note_markdown_rendered(slint::StyledText::default());
-                ui.set_editor_markdown_mode(false);
-                ui.set_line_numbers_text("1".into());
-
-                let mut cstate = canvas_state.lock().unwrap();
-                cstate.pixmap = None;
-                cstate.last_point = None;
-                ui.set_canvas_image(slint::Image::default());
+                load_note_into_ui(
+                    &ui,
+                    &active_id,
+                    &metadata_store,
+                    &session_password,
+                    &session_keyfile,
+                    &canvas_state,
+                );
+                ui.set_vault_status_text("Reverted unsaved edits".into());
             }
         }
     });
