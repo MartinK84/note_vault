@@ -14,16 +14,18 @@ use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use note_vault::config::AppConfig;
 use note_vault::{
-    compact_note_attachments, delete_note_attachments, format_decrypted_json_export,
-    format_decrypted_txt_export, format_file_size, format_line_numbers, format_markdown_export,
-    format_unix_date, format_unix_timestamp, get_canvas_path, get_next_attachment_path,
-    is_attachment_file, is_canvas_file, is_image_filename, is_text_data, is_text_filename,
-    list_note_attachment_files, load_attachment_decrypted, load_attachment_metadata,
-    load_canvas_decrypted, load_note_decrypted, move_note_attachments, parse_markdown_into_blocks,
-    parse_zoom_input, render_markdown_styled, sanitize_filename, save_attachment_encrypted,
-    save_canvas_encrypted, save_note_encrypted, validate_folder_name, AttachmentItem, MainWindow,
-    Note, NoteAttachment, NoteMetadata, NoteType, QuickSearchResult, QuickSearchWindow, TagSuggestion,
-    Theme, UnlockWindow, hsl_to_rgb, rgb_to_hsl,
+    compact_note_attachments, delete_note_attachments, extend_canvas_pixmap,
+    format_decrypted_json_export, format_decrypted_txt_export, format_file_size,
+    format_line_numbers, format_markdown_export, format_unix_date, format_unix_timestamp,
+    get_canvas_path, get_next_attachment_path, is_attachment_file, is_canvas_file,
+    is_image_filename, is_text_data, is_text_filename, list_note_attachment_files,
+    load_attachment_decrypted, load_attachment_metadata, load_canvas_decrypted,
+    load_note_decrypted, move_note_attachments, parse_markdown_into_blocks, parse_zoom_input,
+    render_markdown_styled, sanitize_filename, save_attachment_encrypted, save_canvas_encrypted,
+    save_note_encrypted, validate_folder_name, AttachmentItem, MainWindow, Note, NoteAttachment,
+    NoteMetadata, NoteType, QuickSearchResult, QuickSearchWindow, TagSuggestion, Theme,
+    UnlockWindow, hsl_to_rgb, rgb_to_hsl, CANVAS_EXTEND_STEP, DEFAULT_CANVAS_BG_HEX,
+    DEFAULT_CANVAS_HEIGHT, DEFAULT_CANVAS_WIDTH,
 };
 use rayon::prelude::*;
 use slint::{ComponentHandle, Model};
@@ -1995,8 +1997,11 @@ fn load_note_into_ui(
             }
 
             let pixmap = pixmap_opt.unwrap_or_else(|| {
-                tiny_skia::Pixmap::new(1600, 1200).expect("failed to allocate canvas pixmap")
+                tiny_skia::Pixmap::new(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT)
+                    .expect("failed to allocate canvas pixmap")
             });
+            ui.set_canvas_width(pixmap.width() as f32);
+            ui.set_canvas_height(pixmap.height() as f32);
             let img = pixmap_to_slint_image(&pixmap);
             ui.set_canvas_image(img);
             ui.set_canvas_zoom_percent(100);
@@ -2019,15 +2024,8 @@ fn load_note_into_ui(
             }
 
             if !bg_loaded {
-                let is_dark = ui.global::<Theme>().get_is_dark();
-                let default_hex = if is_dark { "#18181b" } else { "#ffffff" };
-                let default_color = if is_dark {
-                    slint::Color::from_argb_u8(255, 24, 24, 27)
-                } else {
-                    slint::Color::from_argb_u8(255, 255, 255, 255)
-                };
-                ui.set_canvas_bg_color_hex(default_hex.into());
-                ui.set_canvas_bg_color(default_color);
+                ui.set_canvas_bg_color_hex(DEFAULT_CANVAS_BG_HEX.into());
+                ui.set_canvas_bg_color(slint::Color::from_argb_u8(255, 255, 255, 255));
             }
 
             ui.set_canvas_tool("pen".into());
@@ -2431,14 +2429,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     main_window.set_canvas_zoom_text("100%".into());
     main_window.set_canvas_pan_x(0.0);
     main_window.set_canvas_pan_y(0.0);
-    let initial_bg_hex = if is_dark { "#18181b" } else { "#ffffff" };
-    let initial_bg_color = if is_dark {
-        slint::Color::from_argb_u8(255, 24, 24, 27)
-    } else {
-        slint::Color::from_argb_u8(255, 255, 255, 255)
-    };
-    main_window.set_canvas_bg_color_hex(initial_bg_hex.into());
-    main_window.set_canvas_bg_color(initial_bg_color);
+    main_window.set_canvas_width(DEFAULT_CANVAS_WIDTH as f32);
+    main_window.set_canvas_height(DEFAULT_CANVAS_HEIGHT as f32);
+    main_window.set_canvas_bg_color_hex(DEFAULT_CANVAS_BG_HEX.into());
+    main_window.set_canvas_bg_color(slint::Color::from_argb_u8(255, 255, 255, 255));
 
     // Initialize column widths from config
     main_window.set_folder_pane_width(config.folder_pane_width as f32);
@@ -4586,17 +4580,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_canvas_zoom_text("100%".into());
                 ui.set_canvas_pan_x(0.0);
                 ui.set_canvas_pan_y(0.0);
-                let is_dark = ui.global::<Theme>().get_is_dark();
-                let default_hex = if is_dark { "#18181b" } else { "#ffffff" };
-                let default_color = if is_dark {
-                    slint::Color::from_argb_u8(255, 24, 24, 27)
-                } else {
-                    slint::Color::from_argb_u8(255, 255, 255, 255)
-                };
-                ui.set_canvas_bg_color_hex(default_hex.into());
-                ui.set_canvas_bg_color(default_color);
+                ui.set_canvas_width(DEFAULT_CANVAS_WIDTH as f32);
+                ui.set_canvas_height(DEFAULT_CANVAS_HEIGHT as f32);
+                ui.set_canvas_bg_color_hex(DEFAULT_CANVAS_BG_HEX.into());
+                ui.set_canvas_bg_color(slint::Color::from_argb_u8(255, 255, 255, 255));
 
-                let mut pixmap = tiny_skia::Pixmap::new(1600, 1200).expect("failed to allocate canvas pixmap");
+                let mut pixmap = tiny_skia::Pixmap::new(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT)
+                    .expect("failed to allocate canvas pixmap");
                 pixmap.fill(tiny_skia::Color::TRANSPARENT);
                 let img = pixmap_to_slint_image(&pixmap);
                 ui.set_canvas_image(img);
@@ -4812,6 +4802,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let img = pixmap_to_slint_image(pixmap);
                 ui.set_canvas_image(img);
                 ui.set_has_unsaved_changes(true);
+            }
+        }
+    });
+
+    main_window.on_canvas_extend_requested({
+        let window_weak = window_weak.clone();
+        let canvas_state = Arc::clone(&canvas_state);
+
+        move |direction| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let mut cstate = canvas_state.lock().unwrap();
+            let Some(current_pixmap) = cstate.pixmap.as_ref() else { return };
+            if let Some(extended) =
+                extend_canvas_pixmap(current_pixmap, direction.as_str(), CANVAS_EXTEND_STEP)
+            {
+                let new_w = extended.width();
+                let new_h = extended.height();
+                let img = pixmap_to_slint_image(&extended);
+                cstate.pixmap = Some(extended);
+                cstate.last_point = None;
+                ui.set_canvas_width(new_w as f32);
+                ui.set_canvas_height(new_h as f32);
+                ui.set_canvas_image(img);
+                ui.set_has_unsaved_changes(true);
+                ui.set_vault_status_text(
+                    format!("Canvas extended to {}x{} (unsaved)", new_w, new_h).into(),
+                );
             }
         }
     });

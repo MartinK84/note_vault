@@ -3,7 +3,8 @@ use note_vault::{
     get_canvas_path, is_canvas_file, load_canvas_decrypted, move_note_attachments,
     delete_note_attachments, reencrypt_vault_atomic, save_canvas_encrypted, save_note_encrypted,
     load_note_decrypted, Note, NoteType, hsl_to_rgb, rgb_to_hsl, clamp_zoom_percent,
-    parse_zoom_input, scale_coordinate_to_canvas,
+    parse_zoom_input, scale_coordinate_to_canvas, extend_canvas_pixmap, CANVAS_EXTEND_STEP,
+    DEFAULT_CANVAS_BG_HEX, DEFAULT_CANVAS_HEIGHT, DEFAULT_CANVAS_WIDTH,
 };
 use uuid::Uuid;
 
@@ -473,6 +474,53 @@ fn test_canvas_background_color_persistence_roundtrip() {
 
     // Clean up
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_canvas_defaults_and_extend_directions() {
+    assert_eq!(DEFAULT_CANVAS_BG_HEX, "#ffffff");
+    assert_eq!(CANVAS_EXTEND_STEP, 200);
+    assert!(DEFAULT_CANVAS_WIDTH < 1600 && DEFAULT_CANVAS_HEIGHT < 1200);
+
+    let mut pixmap =
+        tiny_skia::Pixmap::new(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT).expect("allocate");
+    pixmap.fill(tiny_skia::Color::TRANSPARENT);
+
+    // Paint a single marker pixel at (10, 20)
+    let red = tiny_skia::PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap();
+    pixmap.pixels_mut()[20 * DEFAULT_CANVAS_WIDTH as usize + 10] = red;
+
+    // 1. Extend right: width + 200, pixel stays at (10, 20)
+    let right_pix = extend_canvas_pixmap(&pixmap, "right", CANVAS_EXTEND_STEP).unwrap();
+    assert_eq!(right_pix.width(), DEFAULT_CANVAS_WIDTH + 200);
+    assert_eq!(right_pix.height(), DEFAULT_CANVAS_HEIGHT);
+    assert_eq!(right_pix.pixel(10, 20).unwrap().red(), 255);
+    assert_eq!(right_pix.pixel(DEFAULT_CANVAS_WIDTH + 100, 20).unwrap().alpha(), 0);
+
+    // 2. Extend bottom: height + 200, pixel stays at (10, 20)
+    let bottom_pix = extend_canvas_pixmap(&right_pix, "bottom", CANVAS_EXTEND_STEP).unwrap();
+    assert_eq!(bottom_pix.width(), DEFAULT_CANVAS_WIDTH + 200);
+    assert_eq!(bottom_pix.height(), DEFAULT_CANVAS_HEIGHT + 200);
+    assert_eq!(bottom_pix.pixel(10, 20).unwrap().red(), 255);
+    assert_eq!(bottom_pix.pixel(10, DEFAULT_CANVAS_HEIGHT + 100).unwrap().alpha(), 0);
+
+    // 3. Extend left: width + 200, pixel shifts right by 200 -> (210, 20)
+    let left_pix = extend_canvas_pixmap(&bottom_pix, "left", CANVAS_EXTEND_STEP).unwrap();
+    assert_eq!(left_pix.width(), DEFAULT_CANVAS_WIDTH + 400);
+    assert_eq!(left_pix.height(), DEFAULT_CANVAS_HEIGHT + 200);
+    assert_eq!(left_pix.pixel(10, 20).unwrap().alpha(), 0);
+    assert_eq!(left_pix.pixel(210, 20).unwrap().red(), 255);
+
+    // 4. Extend top: height + 200, pixel shifts down by 200 -> (210, 220)
+    let top_pix = extend_canvas_pixmap(&left_pix, "top", CANVAS_EXTEND_STEP).unwrap();
+    assert_eq!(top_pix.width(), DEFAULT_CANVAS_WIDTH + 400);
+    assert_eq!(top_pix.height(), DEFAULT_CANVAS_HEIGHT + 400);
+    assert_eq!(top_pix.pixel(210, 20).unwrap().alpha(), 0);
+    assert_eq!(top_pix.pixel(210, 220).unwrap().red(), 255);
+
+    // 5. Invalid direction / zero step return None
+    assert!(extend_canvas_pixmap(&pixmap, "diagonal", CANVAS_EXTEND_STEP).is_none());
+    assert!(extend_canvas_pixmap(&pixmap, "right", 0).is_none());
 }
 
 

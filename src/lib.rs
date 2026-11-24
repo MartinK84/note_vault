@@ -575,6 +575,54 @@ pub fn parse_zoom_input(text: &str) -> Option<i32> {
     cleaned.parse::<i32>().ok().map(clamp_zoom_percent)
 }
 
+/// Default canvas dimensions, extend step, and default white background color.
+pub const DEFAULT_CANVAS_WIDTH: u32 = 800;
+pub const DEFAULT_CANVAS_HEIGHT: u32 = 400;
+pub const CANVAS_EXTEND_STEP: u32 = 200;
+pub const MAX_CANVAS_DIMENSION: u32 = 8000;
+pub const DEFAULT_CANVAS_BG_HEX: &str = "#ffffff";
+
+/// Extends a canvas `Pixmap` by `amount` pixels in the given direction ("top", "bottom", "left", or "right"),
+/// preserving existing artwork at the appropriate offset. Returns `None` for invalid directions or
+/// if the resulting dimensions exceed `MAX_CANVAS_DIMENSION`.
+pub fn extend_canvas_pixmap(
+    src: &tiny_skia::Pixmap,
+    direction: &str,
+    amount: u32,
+) -> Option<tiny_skia::Pixmap> {
+    if amount == 0 {
+        return None;
+    }
+    let old_w = src.width();
+    let old_h = src.height();
+    let (new_w, new_h, offset_x, offset_y) = match direction {
+        "top" => (old_w, old_h.checked_add(amount)?, 0i32, amount as i32),
+        "bottom" => (old_w, old_h.checked_add(amount)?, 0i32, 0i32),
+        "left" => (old_w.checked_add(amount)?, old_h, amount as i32, 0i32),
+        "right" => (old_w.checked_add(amount)?, old_h, 0i32, 0i32),
+        _ => return None,
+    };
+
+    if new_w > MAX_CANVAS_DIMENSION || new_h > MAX_CANVAS_DIMENSION {
+        return None;
+    }
+
+    let mut dst = tiny_skia::Pixmap::new(new_w, new_h)?;
+    let paint = tiny_skia::PixmapPaint {
+        blend_mode: tiny_skia::BlendMode::Source,
+        ..tiny_skia::PixmapPaint::default()
+    };
+    dst.draw_pixmap(
+        offset_x,
+        offset_y,
+        src.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Some(dst)
+}
+
 /// Converts on-screen mouse coordinates to pixmap coordinates given a zoom factor.
 pub fn scale_coordinate_to_canvas(coord: f32, zoom: f32) -> f32 {
     if zoom <= 0.0 {

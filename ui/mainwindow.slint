@@ -61,6 +61,43 @@ export struct NoteMetadata {
     note_type: string,
 }
 
+component CanvasExtendButton inherits Rectangle {
+    in property <string> tooltip_text: "";
+    in property <string> tooltip_side: "bottom"; // "top" | "bottom" | "left" | "right"
+    callback clicked();
+
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    background: touch.has-hover ? Theme.accent : Theme.bg_surface;
+    border-width: 1px;
+    border-color: touch.has-hover ? Theme.accent : Theme.border_active;
+    animate background { duration: 120ms; }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Image {
+        source: @image-url("../assets/icons/plus.svg");
+        width: 18px;
+        height: 18px;
+        colorize: touch.has-hover ? Theme.accent_text : Theme.text_primary;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    TooltipBubble {
+        text: root.tooltip_text;
+        show: touch.has-hover;
+        x: root.tooltip_side == "left" ? -self.width - 6px : (root.tooltip_side == "right" ? parent.width + 6px : (parent.width - self.width) / 2);
+        y: root.tooltip_side == "top" ? -self.height - 6px : (root.tooltip_side == "bottom" ? parent.height + 6px : (parent.height - self.height) / 2);
+    }
+}
+
 export component MainWindow inherits Window {
     title: "NoteVault - Secure Encrypted Notes";
     icon: @image-url("../assets/icons/logo.svg");
@@ -240,8 +277,10 @@ export component MainWindow inherits Window {
     in-out property <length> pan_start_y: 0px;
     in-out property <bool> is_panning: false;
     in-out property <bool> is_drawing: false;
-    in-out property <color> canvas_bg_color: Theme.is_dark ? #18181b : #ffffff;
-    in-out property <string> canvas_bg_color_hex: Theme.is_dark ? "#18181b" : "#ffffff";
+    in-out property <color> canvas_bg_color: #ffffff;
+    in-out property <string> canvas_bg_color_hex: "#ffffff";
+    in-out property <float> canvas_width: 800.0;
+    in-out property <float> canvas_height: 400.0;
     in-out property <string> custom_color_target: "stroke"; // "stroke" | "background"
     in-out property <bool> show_new_note_modal: false;
     in-out property <bool> show_clear_canvas_modal: false;
@@ -273,6 +312,7 @@ export component MainWindow inherits Window {
     callback canvas_stroke_width_changed(float);
     callback canvas_line_style_changed(string);
     callback canvas_clear_requested();
+    callback canvas_extend_requested(string); // "top" | "bottom" | "left" | "right"
     callback new_note_type_selected(string);
     callback custom_color_preview_requested(string);
     callback custom_color_hsl_changed(float, float, float);
@@ -2968,18 +3008,23 @@ export component MainWindow inherits Window {
                     }
 
                     // Canvas Editor Area (Active when note_type is canvas)
-                    Rectangle {
+                    canvas_viewport := Rectangle {
                         vertical-stretch: (root.active_note_type == "canvas" || root.active_note_type == "Canvas") ? 1 : 0;
                         visible: (root.active_note_type == "canvas" || root.active_note_type == "Canvas");
                         background: Theme.bg_main;
                         clip: true;
 
+                        property <length> canvas_disp_w: (root.canvas_width * 1px) * root.canvas_zoom;
+                        property <length> canvas_disp_h: (root.canvas_height * 1px) * root.canvas_zoom;
+                        property <length> canvas_origin_x: (self.width - self.canvas_disp_w) / 2 + root.canvas_pan_x;
+                        property <length> canvas_origin_y: (self.height - self.canvas_disp_h) / 2 + root.canvas_pan_y;
+
                         // Canvas Element
                         Rectangle {
-                            x: (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                            y: (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                            width: 1600px * root.canvas_zoom;
-                            height: 1200px * root.canvas_zoom;
+                            x: parent.canvas_origin_x;
+                            y: parent.canvas_origin_y;
+                            width: parent.canvas_disp_w;
+                            height: parent.canvas_disp_h;
                             background: root.canvas_bg_color;
                             border-radius: 6px;
                             border-width: 1px;
@@ -3000,32 +3045,25 @@ export component MainWindow inherits Window {
                             mouse-cursor: root.is_panning ? grabbing : (root.canvas_tool == "eraser" ? crosshair : default);
 
                             pointer-event(ev) => {
+                                let cx = ((self.mouse-x - canvas_viewport.canvas_origin_x) / 1px) / root.canvas_zoom;
+                                let cy = ((self.mouse-y - canvas_viewport.canvas_origin_y) / 1px) / root.canvas_zoom;
+
                                 if ev.kind == PointerEventKind.down {
                                     if !editor_scope.has-focus {
                                         editor_scope.focus();
                                     }
 
                                     if ev.button == PointerEventButton.middle {
-                                        // End any active drawing cleanly without drawing anything on middle click
                                         if root.is_drawing {
                                             root.is_drawing = false;
-                                            let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                                            let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                                            let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
-                                            let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
                                             root.canvas_pointer_up(cx, cy);
                                         }
                                         root.is_panning = true;
                                         root.pan_start_x = self.mouse-x;
                                         root.pan_start_y = self.mouse-y;
                                     } else if ev.button == PointerEventButton.left {
-                                        // Left click: auto select Pen and start drawing
                                         if root.is_drawing {
                                             root.is_drawing = false;
-                                            let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                                            let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                                            let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
-                                            let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
                                             root.canvas_pointer_up(cx, cy);
                                         }
                                         root.is_panning = false;
@@ -3033,22 +3071,13 @@ export component MainWindow inherits Window {
                                             root.canvas_tool = "pen";
                                             root.canvas_tool_changed("pen");
                                         }
-                                        let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                                        let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                                        let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
-                                        let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
-                                        if cx >= 0.0 && cx <= 1600.0 && cy >= 0.0 && cy <= 1200.0 {
+                                        if cx >= 0.0 && cx <= root.canvas_width && cy >= 0.0 && cy <= root.canvas_height {
                                             root.is_drawing = true;
                                             root.canvas_pointer_down(cx, cy);
                                         }
                                     } else if ev.button == PointerEventButton.right {
-                                        // Right click: auto select Eraser and start erasing
                                         if root.is_drawing {
                                             root.is_drawing = false;
-                                            let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                                            let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                                            let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
-                                            let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
                                             root.canvas_pointer_up(cx, cy);
                                         }
                                         root.is_panning = false;
@@ -3056,11 +3085,7 @@ export component MainWindow inherits Window {
                                             root.canvas_tool = "eraser";
                                             root.canvas_tool_changed("eraser");
                                         }
-                                        let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                                        let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                                        let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
-                                        let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
-                                        if cx >= 0.0 && cx <= 1600.0 && cy >= 0.0 && cy <= 1200.0 {
+                                        if cx >= 0.0 && cx <= root.canvas_width && cy >= 0.0 && cy <= root.canvas_height {
                                             root.is_drawing = true;
                                             root.canvas_pointer_down(cx, cy);
                                         }
@@ -3071,10 +3096,6 @@ export component MainWindow inherits Window {
                                     }
                                     if root.is_drawing {
                                         root.is_drawing = false;
-                                        let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                                        let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                                        let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
-                                        let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
                                         root.canvas_pointer_up(cx, cy);
                                     }
                                 }
@@ -3092,10 +3113,8 @@ export component MainWindow inherits Window {
                                     root.pan_start_x = self.mouse-x;
                                     root.pan_start_y = self.mouse-y;
                                 } else if root.is_drawing {
-                                    let origin_x = (parent.width - 1600px * root.canvas_zoom) / 2 + root.canvas_pan_x;
-                                    let origin_y = (parent.height - 1200px * root.canvas_zoom) / 2 + root.canvas_pan_y;
-                                    let cx = ((self.mouse-x - origin_x) / 1px) / root.canvas_zoom;
-                                    let cy = ((self.mouse-y - origin_y) / 1px) / root.canvas_zoom;
+                                    let cx = ((self.mouse-x - canvas_viewport.canvas_origin_x) / 1px) / root.canvas_zoom;
+                                    let cy = ((self.mouse-y - canvas_viewport.canvas_origin_y) / 1px) / root.canvas_zoom;
                                     root.canvas_pointer_move(cx, cy);
                                 }
                             }
@@ -3119,6 +3138,39 @@ export component MainWindow inherits Window {
                                 }
                                 return EventResult.reject;
                             }
+                        }
+
+                        // Extend Canvas Buttons (Top, Bottom, Left, Right)
+                        CanvasExtendButton {
+                            x: canvas_viewport.canvas_origin_x + (canvas_viewport.canvas_disp_w - self.width) / 2;
+                            y: canvas_viewport.canvas_origin_y - self.height - 10px;
+                            tooltip_text: "Extend canvas +200px above";
+                            tooltip_side: "bottom";
+                            clicked => { root.canvas_extend_requested("top"); }
+                        }
+
+                        CanvasExtendButton {
+                            x: canvas_viewport.canvas_origin_x + (canvas_viewport.canvas_disp_w - self.width) / 2;
+                            y: canvas_viewport.canvas_origin_y + canvas_viewport.canvas_disp_h + 10px;
+                            tooltip_text: "Extend canvas +200px below";
+                            tooltip_side: "top";
+                            clicked => { root.canvas_extend_requested("bottom"); }
+                        }
+
+                        CanvasExtendButton {
+                            x: canvas_viewport.canvas_origin_x - self.width - 10px;
+                            y: canvas_viewport.canvas_origin_y + (canvas_viewport.canvas_disp_h - self.height) / 2;
+                            tooltip_text: "Extend canvas +200px left";
+                            tooltip_side: "right";
+                            clicked => { root.canvas_extend_requested("left"); }
+                        }
+
+                        CanvasExtendButton {
+                            x: canvas_viewport.canvas_origin_x + canvas_viewport.canvas_disp_w + 10px;
+                            y: canvas_viewport.canvas_origin_y + (canvas_viewport.canvas_disp_h - self.height) / 2;
+                            tooltip_text: "Extend canvas +200px right";
+                            tooltip_side: "left";
+                            clicked => { root.canvas_extend_requested("right"); }
                         }
                     }
 
