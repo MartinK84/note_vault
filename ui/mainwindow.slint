@@ -317,6 +317,7 @@ export component MainWindow inherits Window {
     callback custom_color_preview_requested(string);
     callback custom_color_hsl_changed(float, float, float);
     callback canvas_zoom_submitted(string);
+    callback canvas_fit_requested(float, float);
 
     // --- Callbacks for Rust Backend ---
     callback unlock_requested(string);
@@ -2905,6 +2906,44 @@ export component MainWindow inherits Window {
                                     TooltipBubble {
                                         text: "Zoom in 25% (Ctrl + Scroll Up)";
                                         show: zoom_in_touch.has-hover;
+                                        x: (parent.width - self.width) / 2;
+                                        y: parent.height + 4px;
+                                    }
+                                }
+
+                                // Fit whole canvas in view
+                                zoom_fit_btn := Rectangle {
+                                    height: 22px;
+                                    border-radius: 4px;
+                                    background: zoom_fit_touch.has-hover ? Theme.hover : Theme.bg_secondary;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+
+                                    zoom_fit_touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.canvas_fit_requested(canvas_viewport.width / 1px, canvas_viewport.height / 1px);
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        alignment: center;
+                                        cross-axis-alignment: center;
+
+                                        Text {
+                                            text: "Fit";
+                                            font-size: 10px;
+                                            font-weight: 500;
+                                            color: Theme.text_primary;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    TooltipBubble {
+                                        text: "Fit entire canvas in view";
+                                        show: zoom_fit_touch.has-hover;
                                         x: (parent.width - self.width) / 2;
                                         y: parent.height + 4px;
                                     }

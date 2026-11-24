@@ -15,7 +15,8 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use note_vault::config::AppConfig;
 use note_vault::{
     compact_note_attachments, delete_note_attachments, extend_canvas_pixmap,
-    format_decrypted_json_export, format_decrypted_txt_export, format_file_size,
+    fit_canvas_zoom_percent, format_decrypted_json_export, format_decrypted_txt_export,
+    format_file_size,
     format_line_numbers, format_markdown_export, format_unix_date, format_unix_timestamp,
     get_canvas_path, get_next_attachment_path, is_attachment_file, is_canvas_file,
     is_image_filename, is_text_data, is_text_filename, list_note_attachment_files,
@@ -4787,6 +4788,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let cur = ui.get_canvas_zoom_percent();
                 ui.set_canvas_zoom_text(format!("{}%", cur).into());
             }
+        }
+    });
+
+    main_window.on_canvas_fit_requested({
+        let window_weak = window_weak.clone();
+
+        move |viewport_w, viewport_h| {
+            let Some(ui) = window_weak.upgrade() else { return };
+            let pct = fit_canvas_zoom_percent(
+                viewport_w,
+                viewport_h,
+                ui.get_canvas_width(),
+                ui.get_canvas_height(),
+            );
+            ui.set_canvas_zoom_percent(pct);
+            ui.set_canvas_zoom_text(format!("{}%", pct).into());
+            ui.set_canvas_pan_x(0.0);
+            ui.set_canvas_pan_y(0.0);
         }
     });
 

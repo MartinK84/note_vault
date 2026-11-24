@@ -632,6 +632,23 @@ pub fn scale_coordinate_to_canvas(coord: f32, zoom: f32) -> f32 {
     }
 }
 
+/// Computes the zoom percentage (clamped to [25, 100]) needed to fit the entire canvas
+/// inside the given viewport dimensions with comfortable padding.
+pub fn fit_canvas_zoom_percent(
+    viewport_w: f32,
+    viewport_h: f32,
+    canvas_w: f32,
+    canvas_h: f32,
+) -> i32 {
+    let pad = 48.0;
+    let avail_w = (viewport_w - pad).max(100.0);
+    let avail_h = (viewport_h - pad).max(100.0);
+    let scale_x = avail_w / canvas_w.max(1.0);
+    let scale_y = avail_h / canvas_h.max(1.0);
+    let raw_pct = (scale_x.min(scale_y) * 100.0).floor() as i32;
+    raw_pct.clamp(25, 100)
+}
+
 /// Atomically re-encrypts all `.vault` files found recursively within `vault_dir`.
 ///
 /// 1. Finds all files with `.vault` extension (excluding `.vault.new` and temporary files).

@@ -3,8 +3,8 @@ use note_vault::{
     get_canvas_path, is_canvas_file, load_canvas_decrypted, move_note_attachments,
     delete_note_attachments, reencrypt_vault_atomic, save_canvas_encrypted, save_note_encrypted,
     load_note_decrypted, Note, NoteType, hsl_to_rgb, rgb_to_hsl, clamp_zoom_percent,
-    parse_zoom_input, scale_coordinate_to_canvas, extend_canvas_pixmap, CANVAS_EXTEND_STEP,
-    DEFAULT_CANVAS_BG_HEX, DEFAULT_CANVAS_HEIGHT, DEFAULT_CANVAS_WIDTH,
+    parse_zoom_input, scale_coordinate_to_canvas, extend_canvas_pixmap, fit_canvas_zoom_percent,
+    CANVAS_EXTEND_STEP, DEFAULT_CANVAS_BG_HEX, DEFAULT_CANVAS_HEIGHT, DEFAULT_CANVAS_WIDTH,
 };
 use uuid::Uuid;
 
@@ -521,6 +521,19 @@ fn test_canvas_defaults_and_extend_directions() {
     // 5. Invalid direction / zero step return None
     assert!(extend_canvas_pixmap(&pixmap, "diagonal", CANVAS_EXTEND_STEP).is_none());
     assert!(extend_canvas_pixmap(&pixmap, "right", 0).is_none());
+}
+
+#[test]
+fn test_fit_canvas_zoom_percent() {
+    // Canvas smaller than viewport caps at 100% rather than zooming in past 1:1
+    assert_eq!(fit_canvas_zoom_percent(1000.0, 600.0, 800.0, 400.0), 100);
+
+    // Larger canvas zooms out so both width and height fit inside (viewport - 48px)
+    // avail_w = 952, avail_h = 552 -> 952/1600 = 0.595, 552/1200 = 0.46 -> 46%
+    assert_eq!(fit_canvas_zoom_percent(1000.0, 600.0, 1600.0, 1200.0), 46);
+
+    // Very large canvas clamps at minimum allowed zoom (25%)
+    assert_eq!(fit_canvas_zoom_percent(1000.0, 600.0, 4000.0, 4000.0), 25);
 }
 
 
