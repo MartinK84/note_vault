@@ -1,4 +1,4 @@
-/// Validation and sanitization utilities for folders and filenames.
+//! Validation and sanitization utilities for folders and filenames.
 
 /// Validates a user-supplied folder name to ensure it is valid, safe, and portable across OSes (especially Windows).
 /// Returns `Ok(sanitized_trimmed_name)` or `Err(user_friendly_error_message)`.

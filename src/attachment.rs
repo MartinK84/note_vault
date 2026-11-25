@@ -168,12 +168,12 @@ pub fn is_attachment_file(path: &Path) -> bool {
 pub fn parse_attachment_stem(stem: &str) -> Option<(&str, usize)> {
     if let Some(idx) = stem.rfind("_a") {
         let suffix = &stem[idx + 2..];
-        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
-            if let Ok(num) = suffix.parse::<usize>() {
-                if num > 0 {
-                    return Some((&stem[..idx], num));
-                }
-            }
+        if !suffix.is_empty()
+            && suffix.chars().all(|c| c.is_ascii_digit())
+            && let Ok(num) = suffix.parse::<usize>()
+            && num > 0
+        {
+            return Some((&stem[..idx], num));
         }
     }
     None
@@ -205,14 +205,13 @@ pub fn list_note_attachment_files(note_path: &Path) -> Vec<PathBuf> {
     let mut indexed: Vec<(usize, PathBuf)> = Vec::new();
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("vault") {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                if let Some((base, idx)) = parse_attachment_stem(stem) {
-                    if base == note_stem {
-                        indexed.push((idx, path));
-                    }
-                }
-            }
+        if path.is_file()
+            && path.extension().and_then(|s| s.to_str()) == Some("vault")
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            && let Some((base, idx)) = parse_attachment_stem(stem)
+            && base == note_stem
+        {
+            indexed.push((idx, path));
         }
     }
 
@@ -227,12 +226,12 @@ pub fn get_next_attachment_path(note_path: &Path) -> PathBuf {
     let parent = note_path.parent().unwrap_or_else(|| Path::new(""));
     let mut max_idx = 0;
     for p in &existing {
-        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-            if let Some((base, idx)) = parse_attachment_stem(stem) {
-                if base == note_stem && idx > max_idx {
-                    max_idx = idx;
-                }
-            }
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+            && let Some((base, idx)) = parse_attachment_stem(stem)
+            && base == note_stem
+            && idx > max_idx
+        {
+            max_idx = idx;
         }
     }
     parent.join(format!("{}_a{}.vault", note_stem, max_idx + 1))
@@ -295,11 +294,11 @@ pub fn move_note_attachments(old_note_path: &Path, new_note_path: &Path) {
     let new_stem = new_note_path.file_stem().and_then(|s| s.to_str()).unwrap_or("note");
     let new_parent = new_note_path.parent().unwrap_or_else(|| Path::new(""));
     for p in attachments {
-        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-            if let Some((_, idx)) = parse_attachment_stem(stem) {
-                let target = new_parent.join(format!("{}_a{}.vault", new_stem, idx));
-                let _ = fs::rename(&p, &target);
-            }
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+            && let Some((_, idx)) = parse_attachment_stem(stem)
+        {
+            let target = new_parent.join(format!("{}_a{}.vault", new_stem, idx));
+            let _ = fs::rename(&p, &target);
         }
     }
     let old_canvas = get_canvas_path(old_note_path);

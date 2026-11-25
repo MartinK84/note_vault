@@ -149,7 +149,7 @@ fn test_truncated_and_corrupt_files_resilience() {
 
     // 1-byte file
     let f1 = temp_dir.join("one_byte.vault");
-    fs::write(&f1, &[CASCADE_VERSION]).unwrap();
+    fs::write(&f1, [CASCADE_VERSION]).unwrap();
     assert!(load_note_decrypted(pw, None, &f1).is_err());
 
     // 68-byte file (one byte short of CASCADE_HEADER_LEN = 69)

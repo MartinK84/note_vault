@@ -173,12 +173,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             .map_err(|e| format!("Decryption failed: {}", e))?;
 
             // 5. Ensure destination parent directory exists if necessary
-            if let Some(parent) = output.parent() {
-                if !parent.as_os_str().is_empty() {
-                    fs::create_dir_all(parent).map_err(|e| {
-                        format!("Failed to create destination directory '{}': {}", parent.display(), e)
-                    })?;
-                }
+            if let Some(parent) = output.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::create_dir_all(parent).map_err(|e| {
+                    format!("Failed to create destination directory '{}': {}", parent.display(), e)
+                })?;
             }
 
             // 6. Write decrypted plaintext content to output path

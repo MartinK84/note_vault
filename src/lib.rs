@@ -65,10 +65,10 @@ pub const HEADER_LEN: usize = LEGACY_HEADER_LEN;
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
     use std::io::Write;
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
     }
 
     let file_name = path
@@ -566,10 +566,11 @@ pub fn decrypt_bytes(
             Ok(buf) => return Ok(buf),
             Err(e) => {
                 // Fallback if a legacy v1 file's first random salt byte happened to equal 0x03
-                if keyfile_bytes.is_none() && file_data.len() >= LEGACY_HEADER_LEN + TAG_LEN {
-                    if let Ok(legacy_buf) = decrypt_legacy_bytes(file_data, password) {
-                        return Ok(legacy_buf);
-                    }
+                if keyfile_bytes.is_none()
+                    && file_data.len() >= LEGACY_HEADER_LEN + TAG_LEN
+                    && let Ok(legacy_buf) = decrypt_legacy_bytes(file_data, password)
+                {
+                    return Ok(legacy_buf);
                 }
                 return Err(e);
             }
@@ -630,10 +631,11 @@ pub fn decrypt_bytes(
             Err(e) => {
                 // If cascade decryption failed, check if this could be a legacy file whose
                 // first random salt byte happened to match 0x02.
-                if keyfile_bytes.is_none() && file_data.len() >= LEGACY_HEADER_LEN + TAG_LEN {
-                    if let Ok(legacy_buf) = decrypt_legacy_bytes(file_data, password) {
-                        return Ok(legacy_buf);
-                    }
+                if keyfile_bytes.is_none()
+                    && file_data.len() >= LEGACY_HEADER_LEN + TAG_LEN
+                    && let Ok(legacy_buf) = decrypt_legacy_bytes(file_data, password)
+                {
+                    return Ok(legacy_buf);
                 }
                 return Err(e);
             }
@@ -1444,7 +1446,7 @@ mod tests {
 
         // 2. Short header (10 bytes)
         let short_path = temp_dir.join("short.vault");
-        fs::write(&short_path, &[CASCADE_VERSION; 10]).unwrap();
+        fs::write(&short_path, [CASCADE_VERSION; 10]).unwrap();
         let short_res = load_note_decrypted(password, None, &short_path);
         assert!(short_res.is_err(), "File shorter than cascade header must return error");
 
