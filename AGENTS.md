@@ -30,7 +30,6 @@
 - `ui/`: `mainwindow.slint` (single compilation root referenced by `build.rs`), `modals.slint`, `settings.slint`, `quick_search.slint`, `unlock_window.slint`, `theme.slint`.
 - `build.rs`: Compiles `ui/mainwindow.slint` with `slint_build::compile` and embeds `assets/icon.ico` via `winres` on Windows.
 - `scripts/`: `make_release.ps1` (release build + versioned zip packaging) and `create_key.ps1` (1024-byte `notevault.key` generator via `RandomNumberGenerator::Fill`).
-- `.github/workflows/ci.yml`: Windows CI running `cargo clippy --all-targets` and `cargo test`.
 - `tests/`: `vault_integration.rs`, `attachment_integration.rs`, `canvas_integration.rs`, `export_and_validation.rs`.
 
 ## 3. Critical Invariants & Architecture Rules
