@@ -110,8 +110,16 @@ mod windows {
     }
 
     pub fn set_launch_at_startup(enabled: bool, minimized: bool) -> Result<(), Box<dyn Error>> {
+        set_launch_at_startup_for(VALUE_NAME, enabled, minimized)
+    }
+
+    pub fn set_launch_at_startup_for(
+        value_name: &str,
+        enabled: bool,
+        minimized: bool,
+    ) -> Result<(), Box<dyn Error>> {
         let subkey_w = to_wide(SUBKEY);
-        let val_w = to_wide(VALUE_NAME);
+        let val_w = to_wide(value_name);
 
         let mut hkey: isize = 0;
         let open_res = unsafe {
@@ -162,8 +170,12 @@ mod windows {
     }
 
     pub fn is_launch_at_startup_registered() -> Result<bool, Box<dyn Error>> {
+        is_launch_at_startup_registered_for(VALUE_NAME)
+    }
+
+    pub fn is_launch_at_startup_registered_for(value_name: &str) -> Result<bool, Box<dyn Error>> {
         let subkey_w = to_wide(SUBKEY);
-        let val_w = to_wide(VALUE_NAME);
+        let val_w = to_wide(value_name);
 
         let mut hkey: isize = 0;
         let open_res = unsafe {
@@ -198,8 +210,12 @@ mod windows {
     }
 
     pub fn get_startup_command() -> Result<Option<String>, Box<dyn Error>> {
+        get_startup_command_for(VALUE_NAME)
+    }
+
+    pub fn get_startup_command_for(value_name: &str) -> Result<Option<String>, Box<dyn Error>> {
         let subkey_w = to_wide(SUBKEY);
-        let val_w = to_wide(VALUE_NAME);
+        let val_w = to_wide(value_name);
 
         let mut hkey: isize = 0;
         let open_res = unsafe {
@@ -366,28 +382,30 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn test_windows_set_and_query_startup_lifecycle() {
-        // Test registering with minimized=true
-        let res = set_launch_at_startup(true, true);
+        let test_val = format!("NoteVault_Test_{}", uuid::Uuid::new_v4());
+
+        // Test registering with minimized=true using an isolated test registry value
+        let res = windows::set_launch_at_startup_for(&test_val, true, true);
         assert!(res.is_ok(), "Setting launch at startup should succeed: {:?}", res);
 
-        let registered = is_launch_at_startup_registered().unwrap();
+        let registered = windows::is_launch_at_startup_registered_for(&test_val).unwrap();
         assert!(registered, "Should be registered");
 
-        let cmd = get_startup_command().unwrap();
+        let cmd = windows::get_startup_command_for(&test_val).unwrap();
         assert!(cmd.is_some(), "Command should be present");
         let cmd_str = cmd.unwrap();
         assert!(cmd_str.contains("--minimized"), "Should contain --minimized: {}", cmd_str);
 
         // Test updating to minimized=false
-        let res2 = set_launch_at_startup(true, false);
+        let res2 = windows::set_launch_at_startup_for(&test_val, true, false);
         assert!(res2.is_ok());
-        let cmd2 = get_startup_command().unwrap().unwrap();
+        let cmd2 = windows::get_startup_command_for(&test_val).unwrap().unwrap();
         assert!(!cmd2.contains("--minimized"), "Should NOT contain --minimized: {}", cmd2);
 
         // Test unregistering
-        let res3 = set_launch_at_startup(false, false);
+        let res3 = windows::set_launch_at_startup_for(&test_val, false, false);
         assert!(res3.is_ok());
-        let registered_after = is_launch_at_startup_registered().unwrap();
+        let registered_after = windows::is_launch_at_startup_registered_for(&test_val).unwrap();
         assert!(!registered_after, "Should be unregistered");
     }
 }

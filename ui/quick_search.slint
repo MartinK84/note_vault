@@ -1,5 +1,6 @@
 import { LineEdit, Palette } from "std-widgets.slint";
-import { Theme, TooltipBubble } from "theme.slint";
+import { Theme } from "theme.slint";
+import { IconButton, ModalCloseButton } from "components.slint";
 
 export struct QuickSearchResult {
     id: string,
@@ -110,28 +111,29 @@ export component QuickSearchWindow inherits Window {
         Rectangle {
             width: 100%;
             background: Theme.bg_surface;
-            border-radius: 12px;
+            border-radius: Theme.radius_lg;
             border-width: 1px;
             border-color: Theme.border_active;
             clip: true;
 
             VerticalLayout {
-                padding: 12px;
-                spacing: 8px;
+                padding: 14px;
+                spacing: 10px;
 
                 // Search Header Bar
                 HorizontalLayout {
-                    spacing: 8px;
+                    spacing: Theme.space_sm;
                     cross-axis-alignment: center;
 
                     Image {
                         source: @image-url("../assets/icons/search.svg");
-                        width: 20px;
-                        height: 20px;
+                        width: 18px;
+                        height: 18px;
                         colorize: Theme.accent;
                     }
 
                     search_input := LineEdit {
+                        height: Theme.input_height;
                         text <=> root.search_text;
                         placeholder-text: "Search notes by title or tags...";
                         font-size: 14px;
@@ -148,33 +150,11 @@ export component QuickSearchWindow inherits Window {
                         }
                     }
 
-                    Rectangle {
-                        width: 26px;
-                        height: 26px;
-                        border-radius: 6px;
-                        background: close_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                        close_touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.close_requested();
-                            }
-                        }
-
-                        Image {
-                            source: @image-url("../assets/icons/x.svg");
-                            width: 14px;
-                            height: 14px;
-                            colorize: close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        TooltipBubble {
-                            text: "Clear Search / Close (Esc)";
-                            show: close_touch.has-hover;
-                            x: parent.width - self.width;
-                            y: parent.height + 4px;
+                    ModalCloseButton {
+                        tooltip: "Clear Search / Close (Esc)";
+                        tooltip_align_right: true;
+                        clicked => {
+                            root.close_requested();
                         }
                     }
                 }
@@ -189,7 +169,7 @@ export component QuickSearchWindow inherits Window {
                     height: 70px;
                     Text {
                         text: "No matching notes found";
-                        font-size: 13px;
+                        font-size: Theme.font_md;
                         color: Theme.text_muted;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -201,7 +181,7 @@ export component QuickSearchWindow inherits Window {
 
                     for result[idx] in root.results : Rectangle {
                         height: 46px;
-                        border-radius: 8px;
+                        border-radius: Theme.radius_md;
                         background: idx == root.selected_index ? Theme.bg_active : (item_touch.has-hover ? Theme.hover : Colors.transparent);
 
                         item_touch := TouchArea {
@@ -214,8 +194,8 @@ export component QuickSearchWindow inherits Window {
 
                         HorizontalLayout {
                             padding-left: 10px;
-                            padding-right: 10px;
-                            spacing: 8px;
+                            padding-right: 8px;
+                            spacing: Theme.space_sm;
                             cross-axis-alignment: center;
 
                             Image {
@@ -232,7 +212,7 @@ export component QuickSearchWindow inherits Window {
 
                                 Text {
                                     text: result.title;
-                                    font-size: 13px;
+                                    font-size: Theme.font_md;
                                     font-weight: idx == root.selected_index ? 700 : 500;
                                     color: Theme.text_primary;
                                     overflow: elide;
@@ -240,7 +220,7 @@ export component QuickSearchWindow inherits Window {
 
                                 if result.tags != "" : Text {
                                     text: result.tags;
-                                    font-size: 11px;
+                                    font-size: Theme.font_xs;
                                     color: Theme.text_muted;
                                     overflow: elide;
                                 }
@@ -266,34 +246,17 @@ export component QuickSearchWindow inherits Window {
                                 }
                             }
 
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                border-radius: 4px;
-                                background: view_touch.has-hover ? Theme.accent : Colors.transparent;
-
-                                view_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.selected_index = idx;
-                                        root.action_alt_pressed(result.id);
-                                    }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/edit.svg");
-                                    width: 12px;
-                                    height: 12px;
-                                    colorize: view_touch.has-hover ? Theme.accent_text : Theme.text_muted;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "Open in Editor (Alt)";
-                                    show: view_touch.has-hover;
-                                    x: parent.width - self.width;
-                                    y: parent.height + 4px;
+                            IconButton {
+                                icon: @image-url("../assets/icons/edit.svg");
+                                size: 28px;
+                                icon_size: 14px;
+                                icon_color: Theme.text_muted;
+                                icon_hover_color: Theme.accent;
+                                tooltip: "Open in Editor (Alt)";
+                                tooltip_align_right: true;
+                                clicked => {
+                                    root.selected_index = idx;
+                                    root.action_alt_pressed(result.id);
                                 }
                             }
                         }
@@ -312,16 +275,14 @@ export component QuickSearchWindow inherits Window {
 
                 // Keyboard Shortcuts Footer
                 HorizontalLayout {
-                    height: 24px;
+                    height: 22px;
                     padding-left: 6px;
                     padding-right: 6px;
-                    padding-top: 2px;
-                    padding-bottom: 2px;
                     alignment: center;
 
                     Text {
                         text: "↑↓ Navigate  •  [Enter] Copy to Clipboard  •  [Alt] Open Note  •  [Esc] Close";
-                        font-size: 11px;
+                        font-size: Theme.font_xs;
                         color: Theme.text_muted;
                         horizontal-alignment: center;
                         vertical-alignment: center;

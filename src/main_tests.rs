@@ -1,6 +1,11 @@
 use super::*;
+use global_hotkey::hotkey::HotKey;
+use global_hotkey::GlobalHotKeyManager;
+use slint::Model;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
 
 #[test]
 fn test_filter_quick_search_results() {
@@ -11,8 +16,11 @@ fn test_filter_quick_search_results() {
             NoteMetaSummary {
                 title: format!("Title {}", i),
                 category: "General".to_string(),
-                tags: if i % 2 == 0 { vec!["even".to_string(), "special".to_string()] } else { vec!["odd".to_string()] },
-                date: "2026-01-01".to_string(),
+                tags: if i % 2 == 0 {
+                    vec!["even".to_string(), "special".to_string()]
+                } else {
+                    vec!["odd".to_string()]
+                },
                 updated_at: i * 100,
                 file_path: PathBuf::from(format!("/vault/note-{}.vault", i)),
                 note_type: NoteType::Text,
@@ -130,7 +138,7 @@ fn test_format_key_combination() {
 
 #[test]
 fn test_create_tray_icon_succeeds() {
-    let icon_res = create_tray_icon();
+    let icon_res = build_tray_icon();
     assert!(icon_res.is_ok(), "Tray icon creation from logo.svg must succeed");
 }
 
@@ -166,7 +174,6 @@ fn test_get_suggested_tags_aggregation_and_counts() {
             title: "Note 1".to_string(),
             category: "General".to_string(),
             tags: vec!["Rust".to_string(), "Slint".to_string(), "GUI".to_string()],
-            date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
             note_type: NoteType::Text,
@@ -179,7 +186,6 @@ fn test_get_suggested_tags_aggregation_and_counts() {
             title: "Note 2".to_string(),
             category: "General".to_string(),
             tags: vec!["rust".to_string(), "crypto".to_string()],
-            date: "2026-01-02".to_string(),
             updated_at: 200,
             file_path: PathBuf::from("/vault/note-2.vault"),
             note_type: NoteType::Text,
@@ -192,7 +198,6 @@ fn test_get_suggested_tags_aggregation_and_counts() {
             title: "Note 3".to_string(),
             category: "Work".to_string(),
             tags: vec!["crypto".to_string(), "Security".to_string(), "Rust".to_string()],
-            date: "2026-01-03".to_string(),
             updated_at: 300,
             file_path: PathBuf::from("/vault/note-3.vault"),
             note_type: NoteType::Text,
@@ -228,7 +233,6 @@ fn test_get_suggested_tags_case_insensitive_exclusion() {
             title: "Note 1".to_string(),
             category: "General".to_string(),
             tags: vec!["ProjectX".to_string(), "personal".to_string()],
-            date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
             note_type: NoteType::Text,
@@ -253,7 +257,6 @@ fn test_get_suggested_tags_query_filtering() {
             title: "Note 1".to_string(),
             category: "General".to_string(),
             tags: vec!["development".to_string(), "devops".to_string(), "finance".to_string()],
-            date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
             note_type: NoteType::Text,
@@ -284,7 +287,6 @@ fn test_get_suggested_tags_deduplication_and_whitespace() {
             category: "General".to_string(),
             // Contains duplicates within the same note and whitespace tags
             tags: vec!["tag1 ".to_string(), " tag1".to_string(), "   ".to_string()],
-            date: "2026-01-01".to_string(),
             updated_at: 100,
             file_path: PathBuf::from("/vault/note-1.vault"),
             note_type: NoteType::Text,
@@ -656,4 +658,63 @@ fn test_init_blank_new_note_resets_text_and_canvas_state() {
         assert_eq!(pix.width(), DEFAULT_CANVAS_WIDTH);
         assert_eq!(pix.height(), DEFAULT_CANVAS_HEIGHT);
     }
+}
+
+#[test]
+fn test_canvas_undo_redo_and_dirty_rect_sync() {
+    let mut cstate = ActiveCanvasState::default();
+    let mut pixmap = tiny_skia::Pixmap::new(100, 100).unwrap();
+    pixmap.fill(tiny_skia::Color::TRANSPARENT);
+    cstate.pixmap = Some(pixmap);
+
+    let _ = sync_canvas_full(&mut cstate).expect("full sync must produce an image");
+    assert!(!undo_canvas(&mut cstate));
+    assert!(!redo_canvas(&mut cstate));
+
+    // Draw stroke 1 with undo snapshot
+    push_canvas_undo(&mut cstate);
+    if let Some(pix) = cstate.pixmap.as_mut() {
+        draw_stroke_on_pixmap(
+            pix,
+            (20.0, 20.0),
+            (40.0, 40.0),
+            "pen",
+            tiny_skia::Color::from_rgba8(255, 0, 0, 255),
+            4.0,
+            "solid",
+            0.0,
+        );
+    }
+    let _ = sync_canvas_dirty_rect(&mut cstate, (20.0, 20.0), (40.0, 40.0), 4.0)
+        .expect("dirty rect sync must succeed");
+
+    // Pixel at (30, 30) should be red in cached pixel_buffer
+    let buf = cstate.pixel_buffer.as_ref().unwrap();
+    let px = buf.as_slice()[30 * 100 + 30];
+    assert!(px.r > 200 && px.a > 200);
+
+    // Undo restores transparent pixel
+    assert!(undo_canvas(&mut cstate));
+    let _ = sync_canvas_full(&mut cstate);
+    let buf_after_undo = cstate.pixel_buffer.as_ref().unwrap();
+    assert_eq!(buf_after_undo.as_slice()[30 * 100 + 30].a, 0);
+
+    // Redo restores red pixel
+    assert!(redo_canvas(&mut cstate));
+    let _ = sync_canvas_full(&mut cstate);
+    let buf_after_redo = cstate.pixel_buffer.as_ref().unwrap();
+    assert!(buf_after_redo.as_slice()[30 * 100 + 30].r > 200);
+}
+
+#[test]
+fn test_security_settings_label_conversions() {
+    assert_eq!(auto_lock_label_to_minutes("Disabled"), 0);
+    assert_eq!(auto_lock_label_to_minutes("15 min"), 15);
+    assert_eq!(minutes_to_auto_lock_label(0), "Disabled");
+    assert_eq!(minutes_to_auto_lock_label(30), "30 min");
+
+    assert_eq!(clipboard_clear_label_to_seconds("Disabled"), 0);
+    assert_eq!(clipboard_clear_label_to_seconds("30 sec"), 30);
+    assert_eq!(seconds_to_clipboard_clear_label(0), "Disabled");
+    assert_eq!(seconds_to_clipboard_clear_label(60), "60 sec");
 }

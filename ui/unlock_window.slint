@@ -1,12 +1,13 @@
-import { Button, LineEdit, Palette } from "std-widgets.slint";
+import { LineEdit, Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { AppButton, ModalHeader } from "components.slint";
 
 export component UnlockWindow inherits Window {
     title: "NoteVault - Unlock Vault";
     icon: @image-url("../assets/icons/logo.svg");
     no-frame: true;
-    width: 460px;
-    preferred-width: 460px;
+    width: Theme.modal_width_md;
+    preferred-width: Theme.modal_width_md;
     height: content_layout.preferred-height;
     preferred-height: content_layout.preferred-height;
     background: Colors.transparent;
@@ -67,83 +68,48 @@ export component UnlockWindow inherits Window {
             width: 100%;
             height: content_layout.preferred-height;
             background: Theme.bg_surface;
-            border-radius: 12px;
+            border-radius: Theme.radius_lg;
             border-width: 1px;
             border-color: Theme.border_active;
             clip: true;
 
             content_layout := VerticalLayout {
-                padding-top: 16px;
-                padding-bottom: 16px;
-                padding-left: 20px;
-                padding-right: 20px;
-                spacing: 12px;
+                padding-top: Theme.modal_pad_y;
+                padding-bottom: Theme.modal_pad_y;
+                padding-left: Theme.modal_pad_x;
+                padding-right: Theme.modal_pad_x;
+                spacing: Theme.modal_spacing;
                 alignment: start;
 
-                // Header with close button
-                HorizontalLayout {
-                    alignment: space-between;
-                    cross-axis-alignment: center;
+                VerticalLayout {
+                    spacing: 6px;
 
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: start;
-                        cross-axis-alignment: center;
-
-                        Image {
-                            source: @image-url("../assets/icons/lock.svg");
-                            width: 20px;
-                            height: 20px;
-                            colorize: Theme.accent;
-                        }
-
-                        Text {
-                            text: "Unlock Secure Vault";
-                            font-size: 18px;
-                            font-weight: 700;
-                            color: Theme.text_primary;
-                            vertical-alignment: center;
+                    ModalHeader {
+                        title: "Unlock Secure Vault";
+                        show_icon: true;
+                        icon: @image-url("../assets/icons/lock.svg");
+                        icon_color: Theme.accent;
+                        close_clicked => {
+                            root.clear_fields();
+                            root.close_requested();
                         }
                     }
 
-                    Rectangle {
-                        width: 26px;
-                        height: 26px;
-                        border-radius: 6px;
-                        background: close_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                        close_touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.clear_fields();
-                                root.close_requested();
-                            }
-                        }
-
-                        Image {
-                            source: @image-url("../assets/icons/x.svg");
-                            width: 12px;
-                            height: 12px;
-                            colorize: close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                        }
+                    Text {
+                        text: "Enter your master passphrase to unlock and search notes.";
+                        font-size: Theme.font_sm;
+                        color: Theme.text_secondary;
+                        horizontal-alignment: left;
+                        wrap: word-wrap;
                     }
-                }
-
-                Text {
-                    text: "Enter your master passphrase to unlock and search notes.";
-                    font-size: 12px;
-                    color: Theme.text_secondary;
-                    horizontal-alignment: left;
-                    wrap: word-wrap;
                 }
 
                 pwd_input := LineEdit {
+                    height: Theme.input_height;
                     text <=> root.password;
                     input-type: InputType.password;
                     placeholder-text: "Master Vault Password...";
-                    font-size: 13px;
+                    font-size: Theme.font_md;
                     enabled: !root.is_loading;
                     accepted => {
                         if !root.is_loading {
@@ -154,33 +120,31 @@ export component UnlockWindow inherits Window {
 
                 if root.error_message != "" : Text {
                     text: root.error_message;
-                    font-size: 12px;
+                    font-size: Theme.font_sm;
                     color: Theme.danger;
                     horizontal-alignment: left;
                     wrap: word-wrap;
                 }
 
-                if root.show_keyfile_browse : HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
+                HorizontalLayout {
+                    spacing: Theme.space_sm;
+                    alignment: root.show_keyfile_browse ? space-between : end;
+                    cross-axis-alignment: center;
 
-                    Button {
+                    if root.show_keyfile_browse : AppButton {
                         text: "Browse Keyfile...";
+                        variant: "secondary";
                         enabled: !root.is_loading;
                         clicked => {
                             root.browse_keyfile_requested();
                         }
                     }
-                }
 
-                HorizontalLayout {
-                    spacing: 10px;
-
-                    Button {
+                    AppButton {
                         text: root.is_loading ? "Unlocking..." : "Unlock Vault";
-                        primary: true;
+                        variant: "primary";
                         enabled: !root.is_loading;
-                        horizontal-stretch: 1;
+                        horizontal-stretch: root.show_keyfile_browse ? 0 : 1;
                         clicked => {
                             root.unlock_requested(root.password);
                         }

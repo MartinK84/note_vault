@@ -1,5 +1,6 @@
-import { Button, LineEdit, TextEdit, ScrollView, ProgressIndicator, ComboBox, Palette } from "std-widgets.slint";
+import { LineEdit, TextEdit, ScrollView, ProgressIndicator, ComboBox, Palette } from "std-widgets.slint";
 import { Theme, TooltipBubble } from "theme.slint";
+import { AppButton, IconButton } from "components.slint";
 import { 
     UnlockModal, 
     LoadingModal, 
@@ -235,6 +236,8 @@ export component MainWindow inherits Window {
     in-out property <string> settings_main_window_hotkey: "Control+Shift+Space";
     in-out property <bool> settings_minimize_to_tray: true;
     in-out property <bool> settings_launch_at_startup: false;
+    in-out property <string> settings_auto_lock: "Disabled";
+    in-out property <string> settings_clipboard_clear: "30 sec";
     in-out property <string> settings_cur_pwd: "";
     in-out property <string> settings_new_pwd: "";
     in-out property <string> settings_confirm_pwd: "";
@@ -294,6 +297,8 @@ export component MainWindow inherits Window {
     in-out property <int> canvas_zoom_percent: 100;
     in-out property <float> canvas_zoom: root.canvas_zoom_percent / 100.0;
     in-out property <string> canvas_zoom_text: "100%";
+    in-out property <bool> canvas_can_undo: false;
+    in-out property <bool> canvas_can_redo: false;
 
     public function step_zoom(delta: int) {
         let raw = root.canvas_zoom_percent + delta;
@@ -312,6 +317,8 @@ export component MainWindow inherits Window {
     callback canvas_stroke_width_changed(float);
     callback canvas_line_style_changed(string);
     callback canvas_clear_requested();
+    callback canvas_undo_requested();
+    callback canvas_redo_requested();
     callback canvas_extend_requested(string); // "top" | "bottom" | "left" | "right"
     callback new_note_type_selected(string);
     callback custom_color_preview_requested(string);
@@ -349,7 +356,7 @@ export component MainWindow inherits Window {
 
     // Settings & File callbacks
     callback open_settings_requested();
-    callback save_settings_requested(string, bool, string, string, string, bool, bool); // path, multithreading, theme, quick_search_hotkey, main_window_hotkey, minimize_to_tray, launch_at_startup
+    callback save_settings_requested(string, bool, string, string, string, bool, bool, string, string); // path, multithreading, theme, quick_search_hotkey, main_window_hotkey, minimize_to_tray, launch_at_startup, auto_lock, clipboard_clear
     callback browse_vault_path_requested();
     callback change_password_requested(string, string, string); // current, new, confirm
     callback unlock_browse_keyfile_requested();
@@ -374,9 +381,8 @@ export component MainWindow inherits Window {
     callback note_content_edited(string);
     callback copy_text_to_clipboard(string);
 
-    public function save_current_note() {
-        if !root.is_locked && root.active_note_id != ""
-            && !root.show_settings_modal
+    public function no_modal_open() -> bool {
+        return !root.show_settings_modal
             && !root.show_export_modal
             && !root.show_warning_modal
             && !root.show_delete_folder_modal
@@ -389,7 +395,11 @@ export component MainWindow inherits Window {
             && !root.show_add_tag_modal
             && !root.show_welcome_modal
             && !root.show_unsaved_warning
-            && !root.show_exit_confirm_modal {
+            && !root.show_exit_confirm_modal;
+    }
+
+    public function save_current_note() {
+        if !root.is_locked && root.active_note_id != "" && root.no_modal_open() {
             root.save_note_requested(
                 root.note_title,
                 root.note_content,
@@ -421,13 +431,75 @@ export component MainWindow inherits Window {
         height: 100%;
 
         capture-key-pressed(event) => {
-            if root.show_exit_confirm_modal && event.text == Key.Escape {
-                root.show_exit_confirm_modal = false;
-                return accept;
-            }
-            if root.show_attachment_preview_modal && event.text == Key.Escape {
-                root.show_attachment_preview_modal = false;
-                return accept;
+            if event.text == Key.Escape {
+                if root.show_custom_color_modal {
+                    root.show_custom_color_modal = false;
+                    return accept;
+                }
+                if root.show_clear_canvas_modal {
+                    root.show_clear_canvas_modal = false;
+                    return accept;
+                }
+                if root.show_delete_attachment_modal {
+                    root.show_delete_attachment_modal = false;
+                    return accept;
+                }
+                if root.show_delete_note_modal {
+                    root.show_delete_note_modal = false;
+                    return accept;
+                }
+                if root.show_delete_folder_modal {
+                    root.show_delete_folder_modal = false;
+                    return accept;
+                }
+                if root.show_rename_folder_modal {
+                    root.show_rename_folder_modal = false;
+                    root.rename_folder_error_message = "";
+                    return accept;
+                }
+                if root.show_folder_modal {
+                    root.show_folder_modal = false;
+                    root.folder_error_message = "";
+                    return accept;
+                }
+                if root.show_move_note_modal {
+                    root.show_move_note_modal = false;
+                    return accept;
+                }
+                if root.show_add_tag_modal {
+                    root.show_add_tag_modal = false;
+                    return accept;
+                }
+                if root.show_new_note_modal {
+                    root.show_new_note_modal = false;
+                    return accept;
+                }
+                if root.show_warning_modal {
+                    root.show_warning_modal = false;
+                    return accept;
+                }
+                if root.show_unsaved_warning {
+                    root.show_unsaved_warning = false;
+                    root.pending_action_type = "";
+                    root.pending_action_payload = "";
+                    return accept;
+                }
+                if root.show_exit_confirm_modal {
+                    root.show_exit_confirm_modal = false;
+                    return accept;
+                }
+                if root.show_attachment_preview_modal {
+                    root.show_attachment_preview_modal = false;
+                    return accept;
+                }
+                if root.show_settings_modal && !root.is_reencrypting && !root.is_keyfile_reencrypting {
+                    root.show_settings_modal = false;
+                    return accept;
+                }
+                if root.show_export_modal && !root.is_exporting {
+                    root.show_export_modal = false;
+                    return accept;
+                }
             }
             let is_ctrl_s = !event.modifiers.alt && !event.modifiers.shift && (
                 (event.modifiers.control && (event.text == "s" || event.text == "S" || event.text == "\u{0013}"))
@@ -436,6 +508,27 @@ export component MainWindow inherits Window {
             if is_ctrl_s {
                 root.save_current_note();
                 return accept;
+            }
+            if !root.is_locked && root.active_note_type == "canvas" && root.no_modal_open() && !event.modifiers.alt {
+                let is_ctrl_z = !event.modifiers.shift && (
+                    (event.modifiers.control && (event.text == "z" || event.text == "Z" || event.text == "\u{001a}"))
+                    || event.text == "\u{001a}"
+                );
+                if is_ctrl_z {
+                    root.canvas_undo_requested();
+                    return accept;
+                }
+                let is_ctrl_y = !event.modifiers.shift && (
+                    (event.modifiers.control && (event.text == "y" || event.text == "Y" || event.text == "\u{0019}"))
+                    || event.text == "\u{0019}"
+                );
+                let is_ctrl_shift_z = event.modifiers.control && event.modifiers.shift && (
+                    event.text == "z" || event.text == "Z" || event.text == "\u{001a}"
+                );
+                if is_ctrl_y || is_ctrl_shift_z {
+                    root.canvas_redo_requested();
+                    return accept;
+                }
             }
             reject
         }
@@ -457,15 +550,203 @@ export component MainWindow inherits Window {
                 root.save_current_note();
                 return accept;
             }
+            if !root.is_locked && root.active_note_type == "canvas" && root.no_modal_open() && !event.modifiers.alt {
+                let is_ctrl_z = !event.modifiers.shift && (
+                    (event.modifiers.control && (event.text == "z" || event.text == "Z" || event.text == "\u{001a}"))
+                    || event.text == "\u{001a}"
+                );
+                if is_ctrl_z {
+                    root.canvas_undo_requested();
+                    return accept;
+                }
+                let is_ctrl_y = !event.modifiers.shift && (
+                    (event.modifiers.control && (event.text == "y" || event.text == "Y" || event.text == "\u{0019}"))
+                    || event.text == "\u{0019}"
+                );
+                let is_ctrl_shift_z = event.modifiers.control && event.modifiers.shift && (
+                    event.text == "z" || event.text == "Z" || event.text == "\u{001a}"
+                );
+                if is_ctrl_y || is_ctrl_shift_z {
+                    root.canvas_redo_requested();
+                    return accept;
+                }
+            }
             reject
         }
 
-        // Outer container drives the absolute layout
-        Rectangle {
+        // Outer container stacks top menu bar and 3-pane workspace
+        VerticalLayout {
             x: 0px;
             y: 0px;
             width: parent.width;
             height: parent.height;
+            padding: 0px;
+            spacing: 0px;
+
+            // Full-width Top Menu Bar (Height 28px)
+            Rectangle {
+                height: 28px;
+                background: Theme.bg_secondary;
+                z: 50;
+
+                Rectangle {
+                    x: 0px;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border;
+                }
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 12px;
+                    alignment: start;
+                    cross-axis-alignment: center;
+
+                    file_menu_btn := Rectangle {
+                        width: 42px;
+                        height: 22px;
+                        border-radius: 4px;
+                        background: file_menu_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                        file_menu_touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                file_popup.show();
+                            }
+                        }
+
+                        Text {
+                            text: "File";
+                            font-size: Theme.font_sm;
+                            font-weight: 500;
+                            color: Theme.text_primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        file_popup := PopupWindow {
+                            width: 152px;
+                            height: 104px;
+                            x: 0px;
+                            y: 24px;
+
+                            Rectangle {
+                                background: Theme.bg_surface;
+                                border-radius: Theme.radius_md;
+                                border-width: 1px;
+                                border-color: Theme.border_active;
+
+                                VerticalLayout {
+                                    padding: 4px;
+                                    spacing: 2px;
+
+                                    // Settings Item
+                                    Rectangle {
+                                        height: 30px;
+                                        border-radius: Theme.radius_sm;
+                                        background: settings_item_touch.has-hover ? Theme.hover : Colors.transparent;
+
+                                        settings_item_touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                file_popup.close();
+                                                root.open_settings_requested();
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            spacing: 8px;
+                                            alignment: start;
+                                            cross-axis-alignment: center;
+
+                                            Image {
+                                                source: @image-url("../assets/icons/settings.svg");
+                                                width: 14px;
+                                                height: 14px;
+                                                colorize: Theme.text_primary;
+                                            }
+                                            Text { text: "Settings"; font-size: Theme.font_sm; color: Theme.text_primary; vertical-alignment: center; }
+                                        }
+                                    }
+
+                                    // Export Vault Item
+                                    Rectangle {
+                                        height: 30px;
+                                        border-radius: Theme.radius_sm;
+                                        background: (!root.is_locked && export_item_touch.has-hover) ? Theme.hover : Colors.transparent;
+
+                                        export_item_touch := TouchArea {
+                                            mouse-cursor: root.is_locked ? default : pointer;
+                                            clicked => {
+                                                if root.is_locked {
+                                                    return;
+                                                }
+                                                file_popup.close();
+                                                root.show_export_modal = true;
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            spacing: 8px;
+                                            alignment: start;
+                                            cross-axis-alignment: center;
+
+                                            Image {
+                                                source: @image-url("../assets/icons/file.svg");
+                                                width: 14px;
+                                                height: 14px;
+                                                colorize: root.is_locked ? Theme.text_muted : Theme.text_primary;
+                                            }
+                                            Text { text: "Export Vault"; font-size: Theme.font_sm; color: root.is_locked ? Theme.text_muted : Theme.text_primary; vertical-alignment: center; }
+                                        }
+                                    }
+
+                                    // Exit Item
+                                    Rectangle {
+                                        height: 30px;
+                                        border-radius: Theme.radius_sm;
+                                        background: exit_item_touch.has-hover ? Theme.danger_subtle : Colors.transparent;
+
+                                        exit_item_touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                file_popup.close();
+                                                root.show_exit_confirm_modal = true;
+                                                root.exit_requested();
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            spacing: 8px;
+                                            alignment: start;
+                                            cross-axis-alignment: center;
+
+                                            Image {
+                                                source: @image-url("../assets/icons/x.svg");
+                                                width: 14px;
+                                                height: 14px;
+                                                colorize: Theme.danger;
+                                            }
+                                            Text { text: "Exit"; font-size: Theme.font_sm; color: Theme.danger; vertical-alignment: center; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3-Pane Workspace
+            Rectangle {
+                vertical-stretch: 1;
 
         // Computed positions (8px outer padding, 6px dragger width)
         // x1 = 8px (padding)
@@ -484,7 +765,7 @@ export component MainWindow inherits Window {
             width: root.folder_pane_width;
             height: parent.height - 16px;
             background: Theme.bg_secondary;
-            border-radius: 8px;
+            border-radius: Theme.radius_md;
             border-width: 1px;
             border-color: Theme.border;
             clip: true;
@@ -493,166 +774,9 @@ export component MainWindow inherits Window {
                 padding: 0px;
                 spacing: 0px;
 
-                // Top Sleek Menu Bar Strip (Height 26px)
+                // Pane 1 Header (Height 52px - aligned with Panes 2 and 3)
                 Rectangle {
-                    height: 26px;
-                    background: Theme.bg_secondary;
-
-                    Rectangle {
-                        x: 0px;
-                        y: parent.height - 1px;
-                        width: parent.width;
-                        height: 1px;
-                        background: Theme.border;
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        alignment: start;
-
-                        file_menu_btn := Rectangle {
-                            width: 38px;
-                            height: 20px;
-                            border-radius: 4px;
-                            background: file_menu_touch.has-hover ? Theme.hover : Colors.transparent;
-                            y: (parent.height - self.height) / 2;
-
-                            file_menu_touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    file_popup.show();
-                                }
-                            }
-
-                            Text {
-                                text: "File";
-                                font-size: 12px;
-                                color: Theme.text_primary;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            file_popup := PopupWindow {
-                                width: 145px;
-                                height: 104px;
-                                x: 0px;
-                                y: 22px;
-
-                                Rectangle {
-                                    background: Theme.bg_surface;
-                                    border-radius: 6px;
-                                    border-width: 1px;
-                                    border-color: Theme.border_active;
-
-                                    VerticalLayout {
-                                        padding: 4px;
-                                        spacing: 2px;
-
-                                        // Settings Item
-                                        Rectangle {
-                                            height: 30px;
-                                            border-radius: 4px;
-                                            background: settings_item_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                                            settings_item_touch := TouchArea {
-                                                clicked => {
-                                                    file_popup.close();
-                                                    root.open_settings_requested();
-                                                }
-                                            }
-
-                                            HorizontalLayout {
-                                                padding-left: 8px;
-                                                padding-right: 8px;
-                                                spacing: 8px;
-                                                alignment: start;
-                                                cross-axis-alignment: center;
-
-                                                Image {
-                                                    source: @image-url("../assets/icons/settings.svg");
-                                                    width: 14px;
-                                                    height: 14px;
-                                                    colorize: Theme.text_primary;
-                                                }
-                                                Text { text: "Settings"; font-size: 12px; color: Theme.text_primary; vertical-alignment: center; }
-                                            }
-                                        }
-
-                                        // Export Vault Item
-                                        Rectangle {
-                                            height: 30px;
-                                            border-radius: 4px;
-                                            background: (!root.is_locked && export_item_touch.has-hover) ? Theme.hover : Colors.transparent;
-
-                                            export_item_touch := TouchArea {
-                                                mouse-cursor: root.is_locked ? default : pointer;
-                                                clicked => {
-                                                    if root.is_locked {
-                                                        return;
-                                                    }
-                                                    file_popup.close();
-                                                    root.show_export_modal = true;
-                                                }
-                                            }
-
-                                            HorizontalLayout {
-                                                padding-left: 8px;
-                                                padding-right: 8px;
-                                                spacing: 8px;
-                                                alignment: start;
-                                                cross-axis-alignment: center;
-
-                                                Image {
-                                                    source: @image-url("../assets/icons/file.svg");
-                                                    width: 14px;
-                                                    height: 14px;
-                                                    colorize: root.is_locked ? Theme.text_muted : Theme.text_primary;
-                                                }
-                                                Text { text: "Export Vault"; font-size: 12px; color: root.is_locked ? Theme.text_muted : Theme.text_primary; vertical-alignment: center; }
-                                            }
-                                        }
-
-                                        // Exit Item
-                                        Rectangle {
-                                            height: 30px;
-                                            border-radius: 4px;
-                                            background: exit_item_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                                            exit_item_touch := TouchArea {
-                                                clicked => {
-                                                    file_popup.close();
-                                                    root.show_exit_confirm_modal = true;
-                                                    root.exit_requested();
-                                                }
-                                            }
-
-                                            HorizontalLayout {
-                                                padding-left: 8px;
-                                                padding-right: 8px;
-                                                spacing: 8px;
-                                                alignment: start;
-                                                cross-axis-alignment: center;
-
-                                                Image {
-                                                    source: @image-url("../assets/icons/x.svg");
-                                                    width: 14px;
-                                                    height: 14px;
-                                                    colorize: Theme.danger;
-                                                }
-                                                Text { text: "Exit"; font-size: 12px; color: Theme.danger; vertical-alignment: center; }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Pane 1 Header (Height 48px)
-                Rectangle {
-                    height: 48px;
+                    height: Theme.header_height;
                     vertical-stretch: 0;
                     background: Theme.bg_secondary;
                     z: 10;
@@ -666,15 +790,14 @@ export component MainWindow inherits Window {
                     }
 
                     HorizontalLayout {
-                        padding-top: 10px;
-                        padding-bottom: 10px;
-                        padding-left: 14px;
-                        padding-right: 14px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         spacing: 6px;
+                        cross-axis-alignment: center;
 
                         Text {
                             text: "FOLDERS";
-                            font-size: 11px;
+                            font-size: Theme.font_xs;
                             font-weight: 700;
                             color: Theme.text_secondary;
                             letter-spacing: 1px;
@@ -688,121 +811,56 @@ export component MainWindow inherits Window {
 
                         HorizontalLayout {
                             spacing: 4px;
+                            cross-axis-alignment: center;
 
-                            Rectangle {
-                                height: 26px;
-                                width: 28px;
-                                border-radius: 4px;
-                                background: refresh_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                                refresh_touch := TouchArea {
-                                    mouse-cursor: root.is_locked ? default : pointer;
-                                    clicked => {
-                                        if root.is_locked {
-                                            return;
-                                        }
-                                        if root.has_unsaved_changes {
-                                            root.pending_action_type = "rescan_vault";
-                                            root.pending_action_payload = "";
-                                            root.show_unsaved_warning = true;
-                                        } else {
-                                            root.rescan_vault_requested();
-                                        }
+                            IconButton {
+                                icon: @image-url("../assets/icons/refresh.svg");
+                                enabled: !root.is_locked;
+                                icon_color: Theme.text_primary;
+                                tooltip: "Refresh Vault (F5)";
+                                clicked => {
+                                    if root.has_unsaved_changes {
+                                        root.pending_action_type = "rescan_vault";
+                                        root.pending_action_payload = "";
+                                        root.show_unsaved_warning = true;
+                                    } else {
+                                        root.rescan_vault_requested();
                                     }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/refresh.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.is_locked ? Theme.text_muted : Theme.text_primary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "Refresh Vault (F5)";
-                                    show: !root.is_locked && refresh_touch.has-hover;
-                                    x: 0px;
-                                    y: parent.height + 4px;
                                 }
                             }
 
-                            Rectangle {
-                                height: 26px;
-                                width: 28px;
-                                border-radius: 4px;
-                                background: (!root.is_locked && add_folder_touch.has-hover) ? Theme.hover : Colors.transparent;
-
-                                add_folder_touch := TouchArea {
-                                    mouse-cursor: root.is_locked ? default : pointer;
-                                    clicked => {
-                                        if root.is_locked {
-                                            return;
-                                        }
-                                        if root.has_unsaved_changes {
-                                            root.pending_action_type = "new_folder";
-                                            root.pending_action_payload = "";
-                                            root.show_unsaved_warning = true;
-                                        } else {
-                                            root.new_folder_name = "";
-                                            root.folder_error_message = "";
-                                            root.show_folder_modal = true;
-                                            root.new_folder_requested();
-                                        }
+                            IconButton {
+                                icon: @image-url("../assets/icons/plus.svg");
+                                enabled: !root.is_locked;
+                                icon_color: Theme.text_primary;
+                                tooltip: "New Folder";
+                                clicked => {
+                                    if root.has_unsaved_changes {
+                                        root.pending_action_type = "new_folder";
+                                        root.pending_action_payload = "";
+                                        root.show_unsaved_warning = true;
+                                    } else {
+                                        root.new_folder_name = "";
+                                        root.folder_error_message = "";
+                                        root.show_folder_modal = true;
+                                        root.new_folder_requested();
                                     }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/plus.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.is_locked ? Theme.text_muted : Theme.text_primary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "New Folder";
-                                    show: !root.is_locked && add_folder_touch.has-hover;
-                                    x: 0px;
-                                    y: parent.height + 4px;
                                 }
                             }
 
-                            Rectangle {
-                                height: 26px;
-                                width: 28px;
-                                border-radius: 4px;
-                                background: lock_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                                lock_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        if root.is_locked {
-                                            root.show_unlock_modal = true;
-                                        } else {
-                                            root.is_locked = true;
-                                            root.show_unlock_modal = true;
-                                            root.lock_vault();
-                                        }
+                            IconButton {
+                                icon: @image-url("../assets/icons/lock.svg");
+                                icon_color: root.is_locked ? Theme.accent : Theme.text_primary;
+                                tooltip: root.is_locked ? "Unlock Vault" : "Lock Vault";
+                                tooltip_align_right: true;
+                                clicked => {
+                                    if root.is_locked {
+                                        root.show_unlock_modal = true;
+                                    } else {
+                                        root.is_locked = true;
+                                        root.show_unlock_modal = true;
+                                        root.lock_vault();
                                     }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/lock.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.is_locked ? Theme.accent : Theme.text_primary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: root.is_locked ? "Unlock Vault" : "Lock Vault";
-                                    show: lock_touch.has-hover;
-                                    x: parent.width - self.width;
-                                    y: parent.height + 4px;
                                 }
                             }
                         }
@@ -885,14 +943,14 @@ export component MainWindow inherits Window {
                             background: root.active_folder == folder ? Theme.bg_active : (folder_touch.has-hover ? Theme.hover : Colors.transparent);
 
                             folder_menu := PopupWindow {
-                                width: 140px;
-                                height: 74px;
+                                width: 148px;
+                                height: 72px;
                                 x: folder_touch.mouse-x;
                                 y: folder_touch.mouse-y;
 
                                 Rectangle {
                                     background: Theme.bg_surface;
-                                    border-radius: 6px;
+                                    border-radius: Theme.radius_md;
                                     border-width: 1px;
                                     border-color: Theme.border_active;
 
@@ -904,10 +962,11 @@ export component MainWindow inherits Window {
                                         // Rename Folder option
                                         Rectangle {
                                             height: 30px;
-                                            border-radius: 4px;
+                                            border-radius: Theme.radius_sm;
                                             background: ren_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             ren_touch := TouchArea {
+                                                mouse-cursor: pointer;
                                                 clicked => {
                                                     folder_menu.close();
                                                     root.target_folder_name = folder;
@@ -932,7 +991,7 @@ export component MainWindow inherits Window {
                                                 }
                                                 Text {
                                                     text: "Rename Folder";
-                                                    font-size: 12px;
+                                                    font-size: Theme.font_sm;
                                                     color: Theme.text_primary;
                                                     vertical-alignment: center;
                                                 }
@@ -942,10 +1001,11 @@ export component MainWindow inherits Window {
                                         // Delete Folder option
                                         Rectangle {
                                             height: 30px;
-                                            border-radius: 4px;
-                                            background: del_f_touch.has-hover ? Theme.hover : Colors.transparent;
+                                            border-radius: Theme.radius_sm;
+                                            background: del_f_touch.has-hover ? Theme.danger_subtle : Colors.transparent;
 
                                             del_f_touch := TouchArea {
+                                                mouse-cursor: pointer;
                                                 clicked => {
                                                     folder_menu.close();
                                                     root.target_folder_name = folder;
@@ -968,7 +1028,7 @@ export component MainWindow inherits Window {
                                                 }
                                                 Text {
                                                     text: "Delete Folder";
-                                                    font-size: 12px;
+                                                    font-size: Theme.font_sm;
                                                     color: Theme.danger;
                                                     vertical-alignment: center;
                                                 }
@@ -1144,7 +1204,7 @@ export component MainWindow inherits Window {
 
                 // Pane 2 Header (Height 52px, Search LineEdit + New Note Button)
                 Rectangle {
-                    height: 52px;
+                    height: Theme.header_height;
                     vertical-stretch: 0;
                     background: Theme.bg_surface;
                     z: 10;
@@ -1158,15 +1218,14 @@ export component MainWindow inherits Window {
                     }
 
                     HorizontalLayout {
-                        padding-top: 12px;
-                        padding-bottom: 12px;
-                        padding-left: 16px;
-                        padding-right: 16px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         spacing: 8px;
+                        cross-axis-alignment: center;
 
                         LineEdit {
                             height: 28px;
-                            font-size: 13px;
+                            font-size: Theme.font_md;
                             text <=> root.search_query;
                             placeholder-text: "Search notes...";
                             enabled: !root.is_locked;
@@ -1176,40 +1235,20 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if !root.is_locked && root.active_folder != "*All Notes*" : Rectangle {
-                            height: 28px;
-                            width: 32px;
-                            border-radius: 4px;
-                            background: new_note_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                            new_note_touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    if root.has_unsaved_changes {
-                                        root.pending_action_type = "new_note";
-                                        root.pending_action_payload = "";
-                                        root.show_unsaved_warning = true;
-                                    } else {
-                                        root.editor_markdown_mode = false;
-                                        root.show_new_note_modal = true;
-                                    }
+                        if !root.is_locked && root.active_folder != "*All Notes*" : IconButton {
+                            icon: @image-url("../assets/icons/plus.svg");
+                            icon_color: Theme.text_primary;
+                            tooltip: "New Note";
+                            tooltip_align_right: true;
+                            clicked => {
+                                if root.has_unsaved_changes {
+                                    root.pending_action_type = "new_note";
+                                    root.pending_action_payload = "";
+                                    root.show_unsaved_warning = true;
+                                } else {
+                                    root.editor_markdown_mode = false;
+                                    root.show_new_note_modal = true;
                                 }
-                            }
-
-                            Image {
-                                source: @image-url("../assets/icons/plus.svg");
-                                width: 14px;
-                                height: 14px;
-                                colorize: Theme.text_primary;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                            }
-
-                            TooltipBubble {
-                                text: "New Note";
-                                show: !root.is_locked && new_note_touch.has-hover;
-                                x: parent.width - self.width;
-                                y: parent.height + 4px;
                             }
                         }
                     }
@@ -1236,14 +1275,14 @@ export component MainWindow inherits Window {
                             border-color: Theme.border_active;
 
                             note_menu := PopupWindow {
-                                width: 140px;
-                                height: 74px;
+                                width: 148px;
+                                height: 72px;
                                 x: card_touch.mouse-x;
                                 y: card_touch.mouse-y;
 
                                 Rectangle {
                                     background: Theme.bg_surface;
-                                    border-radius: 6px;
+                                    border-radius: Theme.radius_md;
                                     border-width: 1px;
                                     border-color: Theme.border_active;
 
@@ -1255,10 +1294,11 @@ export component MainWindow inherits Window {
                                         // Move Note option
                                         Rectangle {
                                             height: 30px;
-                                            border-radius: 4px;
+                                            border-radius: Theme.radius_sm;
                                             background: move_touch.has-hover ? Theme.hover : Colors.transparent;
 
                                             move_touch := TouchArea {
+                                                mouse-cursor: pointer;
                                                 clicked => {
                                                     note_menu.close();
                                                     root.target_note_id = note.id;
@@ -1283,7 +1323,7 @@ export component MainWindow inherits Window {
                                                 }
                                                 Text {
                                                     text: "Move Note";
-                                                    font-size: 12px;
+                                                    font-size: Theme.font_sm;
                                                     color: Theme.text_primary;
                                                     vertical-alignment: center;
                                                 }
@@ -1293,10 +1333,11 @@ export component MainWindow inherits Window {
                                         // Delete Note option
                                         Rectangle {
                                             height: 30px;
-                                            border-radius: 4px;
-                                            background: del_touch.has-hover ? Theme.hover : Colors.transparent;
+                                            border-radius: Theme.radius_sm;
+                                            background: del_touch.has-hover ? Theme.danger_subtle : Colors.transparent;
 
                                             del_touch := TouchArea {
+                                                mouse-cursor: pointer;
                                                 clicked => {
                                                     note_menu.close();
                                                     root.target_note_id = note.id;
@@ -1320,7 +1361,7 @@ export component MainWindow inherits Window {
                                                 }
                                                 Text {
                                                     text: "Delete Note";
-                                                    font-size: 12px;
+                                                    font-size: Theme.font_sm;
                                                     color: Theme.danger;
                                                     vertical-alignment: center;
                                                 }
@@ -1494,7 +1535,7 @@ export component MainWindow inherits Window {
             width: parent.width - self.x - 8px;
             height: parent.height - 16px;
             background: Theme.bg_main;
-            border-radius: 8px;
+            border-radius: Theme.radius_md;
             border-width: 1px;
             border-color: Theme.border;
             clip: true;
@@ -1547,7 +1588,7 @@ export component MainWindow inherits Window {
 
                     // Single-line Metadata Header Bar (Height 52px)
                     Rectangle {
-                        height: 52px;
+                        height: Theme.header_height;
                         vertical-stretch: 0;
                         background: Theme.bg_surface;
                         z: 20;
@@ -1561,10 +1602,8 @@ export component MainWindow inherits Window {
                         }
 
                         HorizontalLayout {
-                            padding-top: 12px;
-                            padding-bottom: 12px;
-                            padding-left: 16px;
-                            padding-right: 16px;
+                            padding-left: 14px;
+                            padding-right: 14px;
                             spacing: 10px;
                             vertical-stretch: 0;
                             cross-axis-alignment: center;
@@ -1738,128 +1777,40 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            cancel_btn := Rectangle {
-                                height: 28px;
-                                width: max(82px, cancel_layout.preferred-width);
-                                horizontal-stretch: 0;
-                                border-radius: 6px;
-                                border-width: 1px;
-                                border-color: root.has_unsaved_changes ? Theme.border_active : Theme.border;
-                                background: root.has_unsaved_changes
-                                    ? (cancel_touch.has-hover ? Theme.hover : Theme.bg_secondary)
-                                    : Theme.bg_secondary;
-                                opacity: root.has_unsaved_changes ? 1.0 : 0.55;
-                                animate background { duration: 150ms; }
-
-                                cancel_touch := TouchArea {
-                                    mouse-cursor: root.has_unsaved_changes ? pointer : default;
-                                    clicked => {
-                                        if root.has_unsaved_changes {
-                                            root.cancel_note_edits_requested();
-                                        }
-                                    }
-                                }
-
-                                cancel_layout := HorizontalLayout {
-                                    x: 0px;
-                                    y: 0px;
-                                    width: 100%;
-                                    height: 100%;
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    padding-top: 0px;
-                                    padding-bottom: 0px;
-                                    spacing: 6px;
-                                    alignment: center;
-                                    cross-axis-alignment: center;
-
-                                    Image {
-                                        source: @image-url("../assets/icons/x.svg");
-                                        width: 12px;
-                                        height: 12px;
-                                        colorize: root.has_unsaved_changes ? Theme.text_primary : Theme.text_muted;
-                                    }
-
-                                    Text {
-                                        text: "Cancel";
-                                        font-size: 13px;
-                                        font-weight: 500;
-                                        height: 100%;
-                                        color: root.has_unsaved_changes ? Theme.text_primary : Theme.text_muted;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                TooltipBubble {
-                                    text: "Discard unsaved edits and revert to original note";
-                                    show: cancel_touch.has-hover && root.has_unsaved_changes;
-                                    x: parent.width - self.width;
-                                    y: parent.height + 4px;
+                            cancel_btn := AppButton {
+                                text: "Cancel";
+                                variant: "secondary";
+                                compact: true;
+                                enabled: root.has_unsaved_changes;
+                                show_icon: true;
+                                icon: @image-url("../assets/icons/x.svg");
+                                icon_size: 13px;
+                                tooltip: "Discard unsaved edits and revert to original note";
+                                tooltip_align_right: true;
+                                clicked => {
+                                    root.cancel_note_edits_requested();
                                 }
                             }
 
-                            save_btn := Rectangle {
-                                height: 28px;
-                                width: max(78px, save_layout.preferred-width);
-                                horizontal-stretch: 0;
-                                border-radius: 6px;
-                                background: root.has_unsaved_changes
-                                    ? (save_touch.has-hover ? Theme.danger_hover : Theme.danger)
-                                    : (save_touch.has-hover ? Theme.hover : Theme.bg_active);
-                                animate background { duration: 150ms; }
-
-                                save_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.save_current_note();
-                                    }
-                                }
-
-                                save_layout := HorizontalLayout {
-                                    x: 0px;
-                                    y: 0px;
-                                    width: 100%;
-                                    height: 100%;
-                                    padding-left: 12px;
-                                    padding-right: 12px;
-                                    padding-top: 0px;
-                                    padding-bottom: 0px;
-                                    spacing: 6px;
-                                    alignment: center;
-                                    cross-axis-alignment: center;
-
-                                    Image {
-                                        source: @image-url("../assets/icons/save.svg");
-                                        width: 13px;
-                                        height: 13px;
-                                        colorize: root.has_unsaved_changes ? Theme.danger_text : Theme.text_secondary;
-                                    }
-
-                                    Text {
-                                        text: "Save";
-                                        font-size: 13px;
-                                        font-weight: 600;
-                                        height: 100%;
-                                        color: root.has_unsaved_changes ? Theme.danger_text : Theme.text_secondary;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                TooltipBubble {
-                                    text: "Save Note (Ctrl+S)";
-                                    show: save_touch.has-hover;
-                                    x: parent.width - self.width;
-                                    y: parent.height + 4px;
+                            save_btn := AppButton {
+                                text: "Save";
+                                variant: root.has_unsaved_changes ? "primary" : "secondary";
+                                compact: true;
+                                show_icon: true;
+                                icon: @image-url("../assets/icons/save.svg");
+                                icon_size: 13px;
+                                tooltip: "Save Note (Ctrl+S)";
+                                tooltip_align_right: true;
+                                clicked => {
+                                    root.save_current_note();
                                 }
                             }
                         }
                     }
 
-                    // Note Editor Toolbar (Height 36px)
+                    // Note Editor Toolbar (Height 38px)
                     Rectangle {
-                        height: 36px;
+                        height: 38px;
                         background: Theme.bg_surface;
                         z: 10;
 
@@ -1880,43 +1831,16 @@ export component MainWindow inherits Window {
                             cross-axis-alignment: center;
 
                             // 0. Toggle Edit Mode / Markdown Rendered Mode Button
-                            mode_toggle_btn := Rectangle {
-                                width: 28px;
-                                height: 28px;
-                                border-radius: 5px;
-                                background: root.editor_markdown_mode
-                                    ? (mode_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
-                                    : (mode_touch.has-hover ? Theme.hover : Colors.transparent);
-                                border-width: root.editor_markdown_mode ? 1px : 0px;
-                                border-color: root.editor_markdown_mode ? Theme.accent : Colors.transparent;
-                                animate background { duration: 120ms; }
-
-                                mode_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.editor_markdown_mode = !root.editor_markdown_mode;
-                                        root.editor_setting_changed("markdown_mode", root.editor_markdown_mode ? "true" : "false");
-                                        root.toggle_markdown_mode_requested(root.editor_markdown_mode);
-                                    }
-                                }
-
-                                Image {
-                                    source: root.editor_markdown_mode ? @image-url("../assets/icons/edit.svg") : @image-url("../assets/icons/eye.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.editor_markdown_mode ? Theme.accent : (mode_touch.has-hover ? Theme.text_primary : Theme.text_secondary);
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: root.editor_markdown_mode ? "Switch to Edit Mode" : "Preview Markdown";
-                                    show: mode_touch.has-hover;
-                                    x: 0px;
-                                    y: parent.height + 4px;
+                            mode_toggle_btn := IconButton {
+                                icon: root.editor_markdown_mode ? @image-url("../assets/icons/edit.svg") : @image-url("../assets/icons/eye.svg");
+                                active: root.editor_markdown_mode;
+                                tooltip: root.editor_markdown_mode ? "Switch to Edit Mode" : "Preview Markdown";
+                                clicked => {
+                                    root.editor_markdown_mode = !root.editor_markdown_mode;
+                                    root.editor_setting_changed("markdown_mode", root.editor_markdown_mode ? "true" : "false");
+                                    root.toggle_markdown_mode_requested(root.editor_markdown_mode);
                                 }
                             }
-
 
                             // Separator after mode toggle
                             Rectangle {
@@ -1926,122 +1850,41 @@ export component MainWindow inherits Window {
                             }
 
                             // 1. Toggle Line Numbers Button
-                            line_numbers_btn := Rectangle {
-                                width: 28px;
-                                height: 28px;
-                                border-radius: 5px;
-                                opacity: root.editor_markdown_mode ? 0.35 : 1.0;
-                                background: root.editor_show_line_numbers
-                                    ? (ln_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
-                                    : (ln_touch.has-hover ? Theme.hover : Colors.transparent);
-                                border-width: root.editor_show_line_numbers ? 1px : 0px;
-                                border-color: root.editor_show_line_numbers ? Theme.accent : Colors.transparent;
-                                animate background { duration: 120ms; }
-
-                                ln_touch := TouchArea {
-                                    enabled: !root.editor_markdown_mode;
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.editor_show_line_numbers = !root.editor_show_line_numbers;
-                                        root.editor_setting_changed("line_numbers", root.editor_show_line_numbers ? "true" : "false");
-                                    }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/list-ordered.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.editor_show_line_numbers ? Theme.accent : (ln_touch.has-hover ? Theme.text_primary : Theme.text_secondary);
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "Toggle Line Numbers";
-                                    show: ln_touch.has-hover;
-                                    x: 0px;
-                                    y: parent.height + 4px;
+                            line_numbers_btn := IconButton {
+                                icon: @image-url("../assets/icons/list-ordered.svg");
+                                enabled: !root.editor_markdown_mode;
+                                active: root.editor_show_line_numbers;
+                                tooltip: "Toggle Line Numbers";
+                                clicked => {
+                                    root.editor_show_line_numbers = !root.editor_show_line_numbers;
+                                    root.editor_setting_changed("line_numbers", root.editor_show_line_numbers ? "true" : "false");
                                 }
                             }
 
                             // 2. Toggle Line Wrap Button
-                            wrap_btn := Rectangle {
-                                width: 28px;
-                                height: 28px;
-                                border-radius: 5px;
-                                opacity: root.editor_markdown_mode ? 0.35 : 1.0;
-                                background: root.editor_line_wrap
-                                    ? (wrap_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
-                                    : (wrap_touch.has-hover ? Theme.hover : Colors.transparent);
-                                border-width: root.editor_line_wrap ? 1px : 0px;
-                                border-color: root.editor_line_wrap ? Theme.accent : Colors.transparent;
-                                animate background { duration: 120ms; }
-
-                                wrap_touch := TouchArea {
-                                    enabled: !root.editor_markdown_mode;
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.editor_line_wrap = !root.editor_line_wrap;
-                                        if root.editor_line_wrap {
-                                            editor_scroll.content-x = 0px;
-                                        }
-                                        root.editor_setting_changed("line_wrap", root.editor_line_wrap ? "true" : "false");
+                            wrap_btn := IconButton {
+                                icon: @image-url("../assets/icons/wrap-text.svg");
+                                enabled: !root.editor_markdown_mode;
+                                active: root.editor_line_wrap;
+                                tooltip: "Toggle Line Wrap";
+                                clicked => {
+                                    root.editor_line_wrap = !root.editor_line_wrap;
+                                    if root.editor_line_wrap {
+                                        editor_scroll.content-x = 0px;
                                     }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/wrap-text.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.editor_line_wrap ? Theme.accent : (wrap_touch.has-hover ? Theme.text_primary : Theme.text_secondary);
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "Toggle Line Wrap";
-                                    show: wrap_touch.has-hover;
-                                    x: (parent.width - self.width) / 2;
-                                    y: parent.height + 4px;
+                                    root.editor_setting_changed("line_wrap", root.editor_line_wrap ? "true" : "false");
                                 }
                             }
 
                             // 3. Toggle Current Line Highlight Button
-                            hl_btn := Rectangle {
-                                width: 28px;
-                                height: 28px;
-                                border-radius: 5px;
-                                opacity: root.editor_markdown_mode ? 0.35 : 1.0;
-                                background: root.editor_highlight_current_line
-                                    ? (hl_touch.has-hover ? Theme.accent_hover : Theme.bg_active)
-                                    : (hl_touch.has-hover ? Theme.hover : Colors.transparent);
-                                border-width: root.editor_highlight_current_line ? 1px : 0px;
-                                border-color: root.editor_highlight_current_line ? Theme.accent : Colors.transparent;
-                                animate background { duration: 120ms; }
-
-                                hl_touch := TouchArea {
-                                    enabled: !root.editor_markdown_mode;
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.editor_highlight_current_line = !root.editor_highlight_current_line;
-                                        root.editor_setting_changed("highlight_line", root.editor_highlight_current_line ? "true" : "false");
-                                    }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/highlighter.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.editor_highlight_current_line ? Theme.accent : (hl_touch.has-hover ? Theme.text_primary : Theme.text_secondary);
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "Highlight Current Line";
-                                    show: hl_touch.has-hover;
-                                    x: (parent.width - self.width) / 2;
-                                    y: parent.height + 4px;
+                            hl_btn := IconButton {
+                                icon: @image-url("../assets/icons/highlighter.svg");
+                                enabled: !root.editor_markdown_mode;
+                                active: root.editor_highlight_current_line;
+                                tooltip: "Highlight Current Line";
+                                clicked => {
+                                    root.editor_highlight_current_line = !root.editor_highlight_current_line;
+                                    root.editor_setting_changed("highlight_line", root.editor_highlight_current_line ? "true" : "false");
                                 }
                             }
 
@@ -2058,49 +1901,30 @@ export component MainWindow inherits Window {
                                 alignment: center;
                                 cross-axis-alignment: center;
 
-                                font_dec_btn := Rectangle {
-                                    width: 24px;
-                                    height: 24px;
-                                    border-radius: 4px;
-                                    background: fdec_touch.has-hover ? Theme.hover : Colors.transparent;
-                                    animate background { duration: 120ms; }
-
-                                    fdec_touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            if root.editor_font_size > 10 {
-                                                root.editor_font_size -= 1;
-                                                root.editor_setting_changed("font_size", root.editor_font_size);
-                                            }
+                                font_dec_btn := IconButton {
+                                    icon: @image-url("../assets/icons/minus.svg");
+                                    icon_size: 12px;
+                                    enabled: root.editor_font_size > 10;
+                                    tooltip: "Decrease Font Size";
+                                    clicked => {
+                                        if root.editor_font_size > 10 {
+                                            root.editor_font_size -= 1;
+                                            root.editor_setting_changed("font_size", root.editor_font_size);
                                         }
-                                    }
-
-                                    Image {
-                                        source: @image-url("../assets/icons/minus.svg");
-                                        width: 12px;
-                                        height: 12px;
-                                        colorize: fdec_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    TooltipBubble {
-                                        text: "Decrease Font Size";
-                                        show: fdec_touch.has-hover;
-                                        x: (parent.width - self.width) / 2;
-                                        y: parent.height + 4px;
                                     }
                                 }
 
                                 Rectangle {
-                                    width: 38px;
-                                    height: 22px;
-                                    border-radius: 4px;
+                                    width: 40px;
+                                    height: 28px;
+                                    border-radius: Theme.radius_sm;
                                     background: Theme.bg_secondary;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
 
                                     Text {
                                         text: root.editor_font_size + "px";
-                                        font-size: 11px;
+                                        font-size: Theme.font_xs;
                                         font-weight: 600;
                                         color: Theme.text_primary;
                                         horizontal-alignment: center;
@@ -2108,37 +1932,16 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                font_inc_btn := Rectangle {
-                                    width: 24px;
-                                    height: 24px;
-                                    border-radius: 4px;
-                                    background: finc_touch.has-hover ? Theme.hover : Colors.transparent;
-                                    animate background { duration: 120ms; }
-
-                                    finc_touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            if root.editor_font_size < 28 {
-                                                root.editor_font_size += 1;
-                                                root.editor_setting_changed("font_size", root.editor_font_size);
-                                            }
+                                font_inc_btn := IconButton {
+                                    icon: @image-url("../assets/icons/plus.svg");
+                                    icon_size: 12px;
+                                    enabled: root.editor_font_size < 28;
+                                    tooltip: "Increase Font Size";
+                                    clicked => {
+                                        if root.editor_font_size < 28 {
+                                            root.editor_font_size += 1;
+                                            root.editor_setting_changed("font_size", root.editor_font_size);
                                         }
-                                    }
-
-                                    Image {
-                                        source: @image-url("../assets/icons/plus.svg");
-                                        width: 12px;
-                                        height: 12px;
-                                        colorize: finc_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    TooltipBubble {
-                                        text: "Increase Font Size";
-                                        show: finc_touch.has-hover;
-                                        x: (parent.width - self.width) / 2;
-                                        y: parent.height + 4px;
                                     }
                                 }
                             }
@@ -2150,143 +1953,42 @@ export component MainWindow inherits Window {
                             }
 
                             // Attach File Button
-                            attach_file_btn := Rectangle {
-                                height: 26px;
-                                border-radius: 5px;
-                                background: att_btn_touch.has-hover ? Theme.hover : Theme.bg_secondary;
-                                border-width: 1px;
-                                border-color: att_btn_touch.has-hover ? Theme.border_active : Theme.border;
-                                animate background { duration: 120ms; }
-
-                                att_btn_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.add_attachment_requested();
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 10px;
-                                    spacing: 5px;
-                                    alignment: center;
-                                    cross-axis-alignment: center;
-
-                                    Image {
-                                        source: @image-url("../assets/icons/paperclip.svg");
-                                        width: 13px;
-                                        height: 13px;
-                                        colorize: att_btn_touch.has-hover ? Theme.accent : Theme.text_secondary;
-                                    }
-
-                                    Text {
-                                        text: "Attach File";
-                                        font-size: 11px;
-                                        font-weight: 500;
-                                        color: att_btn_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                TooltipBubble {
-                                    text: "Attach file(s) to this note";
-                                    show: att_btn_touch.has-hover;
-                                    x: (parent.width - self.width) / 2;
-                                    y: parent.height + 4px;
+                            attach_file_btn := AppButton {
+                                text: "Attach File";
+                                variant: "secondary";
+                                compact: true;
+                                show_icon: true;
+                                icon: @image-url("../assets/icons/paperclip.svg");
+                                tooltip: "Attach file(s) to this note";
+                                clicked => {
+                                    root.add_attachment_requested();
                                 }
                             }
 
                             // 5. Export Decrypted Note as JSON
-                            export_json_btn := Rectangle {
-                                height: 26px;
-                                border-radius: 5px;
-                                background: json_touch.has-hover ? Theme.hover : Theme.bg_secondary;
-                                border-width: 1px;
-                                border-color: json_touch.has-hover ? Theme.border_active : Theme.border;
-                                animate background { duration: 120ms; }
-
-                                json_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.export_note_json_requested();
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 10px;
-                                    spacing: 5px;
-                                    alignment: center;
-                                    cross-axis-alignment: center;
-
-                                    Image {
-                                        source: @image-url("../assets/icons/file-json.svg");
-                                        width: 13px;
-                                        height: 13px;
-                                        colorize: json_touch.has-hover ? Theme.accent : Theme.text_secondary;
-                                    }
-
-                                    Text {
-                                        text: "Export JSON";
-                                        font-size: 11px;
-                                        font-weight: 500;
-                                        color: json_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                TooltipBubble {
-                                    text: "Export Note as unencrypted JSON";
-                                    show: json_touch.has-hover;
-                                    x: (parent.width - self.width) / 2;
-                                    y: parent.height + 4px;
+                            export_json_btn := AppButton {
+                                text: "Export JSON";
+                                variant: "secondary";
+                                compact: true;
+                                show_icon: true;
+                                icon: @image-url("../assets/icons/file-json.svg");
+                                tooltip: "Export Note as unencrypted JSON";
+                                clicked => {
+                                    root.export_note_json_requested();
                                 }
                             }
 
                             // 6. Export Decrypted Note as TXT
-                            export_txt_btn := Rectangle {
-                                height: 26px;
-                                border-radius: 5px;
-                                background: txt_touch.has-hover ? Theme.hover : Theme.bg_secondary;
-                                border-width: 1px;
-                                border-color: txt_touch.has-hover ? Theme.border_active : Theme.border;
-                                animate background { duration: 120ms; }
-
-                                txt_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.export_note_txt_requested();
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 10px;
-                                    spacing: 5px;
-                                    alignment: center;
-                                    cross-axis-alignment: center;
-
-                                    Image {
-                                        source: @image-url("../assets/icons/file-text.svg");
-                                        width: 13px;
-                                        height: 13px;
-                                        colorize: txt_touch.has-hover ? Theme.accent : Theme.text_secondary;
-                                    }
-
-                                    Text {
-                                        text: "Export TXT";
-                                        font-size: 11px;
-                                        font-weight: 500;
-                                        color: txt_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                TooltipBubble {
-                                    text: "Export Note as unencrypted Text / Markdown";
-                                    show: txt_touch.has-hover;
-                                    x: parent.width - self.width;
-                                    y: parent.height + 4px;
+                            export_txt_btn := AppButton {
+                                text: "Export TXT";
+                                variant: "secondary";
+                                compact: true;
+                                show_icon: true;
+                                icon: @image-url("../assets/icons/file-text.svg");
+                                tooltip: "Export Note as unencrypted Text / Markdown";
+                                tooltip_align_right: true;
+                                clicked => {
+                                    root.export_note_txt_requested();
                                 }
                             }
                         }
@@ -2300,72 +2002,24 @@ export component MainWindow inherits Window {
                             cross-axis-alignment: center;
 
                             // 1. Pen Tool Button
-                            pen_btn := Rectangle {
-                                width: 28px;
-                                height: 28px;
-                                border-radius: 5px;
-                                background: root.canvas_tool == "pen" ? Theme.bg_active : (pen_touch.has-hover ? Theme.hover : Colors.transparent);
-                                border-width: 1px;
-                                border-color: root.canvas_tool == "pen" ? Theme.accent : Colors.transparent;
-                                animate background { duration: 120ms; }
-
-                                pen_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.canvas_tool = "pen";
-                                        root.canvas_tool_changed("pen");
-                                    }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/brush.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.canvas_tool == "pen" ? Theme.accent : Theme.text_secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "Brush Tool (Left-Click to draw)";
-                                    show: pen_touch.has-hover;
-                                    x: (parent.width - self.width) / 2;
-                                    y: parent.height + 4px;
+                            pen_btn := IconButton {
+                                icon: @image-url("../assets/icons/brush.svg");
+                                active: root.canvas_tool == "pen";
+                                tooltip: "Brush Tool (Left-Click to draw)";
+                                clicked => {
+                                    root.canvas_tool = "pen";
+                                    root.canvas_tool_changed("pen");
                                 }
                             }
 
                             // 2. Eraser Tool Button
-                            eraser_btn := Rectangle {
-                                width: 28px;
-                                height: 28px;
-                                border-radius: 5px;
-                                background: root.canvas_tool == "eraser" ? Theme.bg_active : (eraser_touch.has-hover ? Theme.hover : Colors.transparent);
-                                border-width: 1px;
-                                border-color: root.canvas_tool == "eraser" ? Theme.accent : Colors.transparent;
-                                animate background { duration: 120ms; }
-
-                                eraser_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.canvas_tool = "eraser";
-                                        root.canvas_tool_changed("eraser");
-                                    }
-                                }
-
-                                Image {
-                                    source: @image-url("../assets/icons/eraser.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.canvas_tool == "eraser" ? Theme.accent : Theme.text_secondary;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                TooltipBubble {
-                                    text: "Eraser Tool (Right-Click to erase)";
-                                    show: eraser_touch.has-hover;
-                                    x: (parent.width - self.width) / 2;
-                                    y: parent.height + 4px;
+                            eraser_btn := IconButton {
+                                icon: @image-url("../assets/icons/eraser.svg");
+                                active: root.canvas_tool == "eraser";
+                                tooltip: "Eraser Tool (Right-Click to erase)";
+                                clicked => {
+                                    root.canvas_tool = "eraser";
+                                    root.canvas_tool_changed("eraser");
                                 }
                             }
 
@@ -3069,50 +2723,39 @@ export component MainWindow inherits Window {
                                 background: Theme.border;
                             }
 
+                            // 6b. Undo & Redo Buttons
+                            undo_canvas_btn := IconButton {
+                                icon: @image-url("../assets/icons/undo.svg");
+                                enabled: root.canvas_can_undo;
+                                icon_color: Theme.text_primary;
+                                tooltip: "Undo (Ctrl+Z)";
+                                clicked => {
+                                    root.canvas_undo_requested();
+                                }
+                            }
+
+                            redo_canvas_btn := IconButton {
+                                icon: @image-url("../assets/icons/redo.svg");
+                                enabled: root.canvas_can_redo;
+                                icon_color: Theme.text_primary;
+                                tooltip: "Redo (Ctrl+Y)";
+                                clicked => {
+                                    root.canvas_redo_requested();
+                                }
+                            }
+
                             // 7. Clear Canvas Button
-                            clear_canvas_btn := Rectangle {
-                                height: 24px;
-                                border-radius: 4px;
-                                background: clear_canv_touch.has-hover ? Theme.danger_hover : Colors.transparent;
-                                border-width: 1px;
-                                border-color: clear_canv_touch.has-hover ? Theme.danger : Theme.border;
-                                animate background { duration: 120ms; }
-
-                                clear_canv_touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.show_clear_canvas_modal = true;
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    padding-left: 8px;
-                                    padding-right: 8px;
-                                    spacing: 4px;
-                                    alignment: center;
-                                    cross-axis-alignment: center;
-
-                                    Image {
-                                        source: @image-url("../assets/icons/trash.svg");
-                                        width: 11px;
-                                        height: 11px;
-                                        colorize: clear_canv_touch.has-hover ? Theme.danger_text : Theme.text_muted;
-                                    }
-
-                                    Text {
-                                        text: "Clear";
-                                        font-size: 11px;
-                                        font-weight: 500;
-                                        color: clear_canv_touch.has-hover ? Theme.danger_text : Theme.text_muted;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                TooltipBubble {
-                                    text: "Clear entire canvas";
-                                    show: clear_canv_touch.has-hover;
-                                    x: (parent.width - self.width) / 2;
-                                    y: parent.height + 4px;
+                            clear_canvas_btn := AppButton {
+                                text: "Clear";
+                                variant: "secondary";
+                                compact: true;
+                                show_icon: true;
+                                icon: @image-url("../assets/icons/trash.svg");
+                                icon_size: 13px;
+                                tooltip: "Clear entire canvas";
+                                tooltip_align_right: true;
+                                clicked => {
+                                    root.show_clear_canvas_modal = true;
                                 }
                             }
                         }
@@ -3789,9 +3432,9 @@ export component MainWindow inherits Window {
                             padding: 0px;
                             spacing: 0px;
 
-                            // Attachments Header Bar (Height 34px)
+                            // Attachments Header Bar (Height 36px)
                             Rectangle {
-                                height: 34px;
+                                height: 36px;
                                 background: Theme.bg_surface;
 
                                 HorizontalLayout {
@@ -3877,47 +3520,18 @@ export component MainWindow inherits Window {
                                     }
 
                                     // Right: "+ Add File" button
-                                    Rectangle {
-                                        height: 24px;
-                                        border-radius: 4px;
-                                        background: add_att_btn_touch.has-hover ? Theme.accent_hover : Theme.accent;
-                                        animate background { duration: 120ms; }
-
-                                        add_att_btn_touch := TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.add_attachment_requested();
-                                            }
-                                        }
-
-                                        HorizontalLayout {
-                                            padding-left: 8px;
-                                            padding-right: 8px;
-                                            spacing: 4px;
-                                            alignment: center;
-                                            cross-axis-alignment: center;
-
-                                            Image {
-                                                source: @image-url("../assets/icons/plus.svg");
-                                                width: 11px;
-                                                height: 11px;
-                                                colorize: Theme.accent_text;
-                                            }
-
-                                            Text {
-                                                text: "Add File";
-                                                font-size: 11px;
-                                                font-weight: 600;
-                                                color: Theme.accent_text;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-
-                                        TooltipBubble {
-                                            text: "Add one or multiple attachments";
-                                            show: add_att_btn_touch.has-hover;
-                                            x: parent.width - self.width;
-                                            y: -28px;
+                                    AppButton {
+                                        text: "Add File";
+                                        variant: "primary";
+                                        compact: true;
+                                        show_icon: true;
+                                        icon: @image-url("../assets/icons/plus.svg");
+                                        icon_size: 12px;
+                                        tooltip: "Add one or multiple attachments";
+                                        tooltip_align_right: true;
+                                        tooltip_above: true;
+                                        clicked => {
+                                            root.add_attachment_requested();
                                         }
                                     }
                                 }
@@ -3982,7 +3596,7 @@ export component MainWindow inherits Window {
                                             border-width: 1px;
                                             border-color: att_card_touch.has-hover ? Theme.border_active : Theme.border;
                                             animate background { duration: 120ms; }
-                                            z: (del_att_touch.has-hover || rep_touch.has-hover || extract_touch.has-hover || prev_touch.has-hover || att_card_touch.has-hover) ? 100 : 1;
+                                            z: (att_del.hovered || att_rep.hovered || att_dl.hovered || att_prev.hovered || att_card_touch.has-hover) ? 100 : 1;
 
                                             att_card_touch := TouchArea {
                                                 mouse-cursor: pointer;
@@ -4056,135 +3670,57 @@ export component MainWindow inherits Window {
 
                                                 // Right: Action Buttons (Preview, Extract, Replace, Delete)
                                                 HorizontalLayout {
-                                                    spacing: 3px;
+                                                    spacing: 2px;
                                                     alignment: end;
                                                     cross-axis-alignment: center;
 
-                                                    // Preview Button
-                                                    Rectangle {
-                                                        width: 24px;
-                                                        height: 24px;
-                                                        border-radius: 4px;
-                                                        background: prev_touch.has-hover ? Theme.bg_active : Colors.transparent;
-                                                        z: prev_touch.has-hover ? 50 : 1;
-
-                                                        prev_touch := TouchArea {
-                                                            mouse-cursor: pointer;
-                                                            clicked => {
-                                                                root.preview_attachment_requested(att.id);
-                                                            }
-                                                        }
-
-                                                        Image {
-                                                            source: @image-url("../assets/icons/eye.svg");
-                                                            width: 13px;
-                                                            height: 13px;
-                                                            colorize: prev_touch.has-hover ? Theme.accent : Theme.text_secondary;
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: (parent.height - self.height) / 2;
-                                                        }
-
-                                                        TooltipBubble {
-                                                            text: "Preview attachment";
-                                                            show: prev_touch.has-hover;
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: -28px;
+                                                    att_prev := IconButton {
+                                                        icon: @image-url("../assets/icons/eye.svg");
+                                                        size: 26px;
+                                                        icon_size: 13px;
+                                                        icon_hover_color: Theme.accent;
+                                                        tooltip: "Preview attachment";
+                                                        tooltip_above: true;
+                                                        clicked => {
+                                                            root.preview_attachment_requested(att.id);
                                                         }
                                                     }
 
-                                                    // Extract / Download Button
-                                                    Rectangle {
-                                                        width: 24px;
-                                                        height: 24px;
-                                                        border-radius: 4px;
-                                                        background: extract_touch.has-hover ? Theme.bg_active : Colors.transparent;
-                                                        z: extract_touch.has-hover ? 50 : 1;
-
-                                                        extract_touch := TouchArea {
-                                                            mouse-cursor: pointer;
-                                                            clicked => {
-                                                                root.extract_attachment_requested(att.id);
-                                                            }
-                                                        }
-
-                                                        Image {
-                                                            source: @image-url("../assets/icons/download.svg");
-                                                            width: 13px;
-                                                            height: 13px;
-                                                            colorize: extract_touch.has-hover ? Theme.accent : Theme.text_secondary;
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: (parent.height - self.height) / 2;
-                                                        }
-
-                                                        TooltipBubble {
-                                                            text: "Download / Save to disk";
-                                                            show: extract_touch.has-hover;
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: -28px;
+                                                    att_dl := IconButton {
+                                                        icon: @image-url("../assets/icons/download.svg");
+                                                        size: 26px;
+                                                        icon_size: 13px;
+                                                        icon_hover_color: Theme.accent;
+                                                        tooltip: "Download / Save to disk";
+                                                        tooltip_above: true;
+                                                        clicked => {
+                                                            root.extract_attachment_requested(att.id);
                                                         }
                                                     }
 
-                                                    // Replace Button
-                                                    Rectangle {
-                                                        width: 24px;
-                                                        height: 24px;
-                                                        border-radius: 4px;
-                                                        background: rep_touch.has-hover ? Theme.bg_active : Colors.transparent;
-                                                        z: rep_touch.has-hover ? 50 : 1;
-
-                                                        rep_touch := TouchArea {
-                                                            mouse-cursor: pointer;
-                                                            clicked => {
-                                                                root.replace_attachment_requested(att.id);
-                                                            }
-                                                        }
-
-                                                        Image {
-                                                            source: @image-url("../assets/icons/refresh.svg");
-                                                            width: 13px;
-                                                            height: 13px;
-                                                            colorize: rep_touch.has-hover ? Theme.accent : Theme.text_secondary;
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: (parent.height - self.height) / 2;
-                                                        }
-
-                                                        TooltipBubble {
-                                                            text: "Replace with new file";
-                                                            show: rep_touch.has-hover;
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: -28px;
+                                                    att_rep := IconButton {
+                                                        icon: @image-url("../assets/icons/refresh.svg");
+                                                        size: 26px;
+                                                        icon_size: 13px;
+                                                        icon_hover_color: Theme.accent;
+                                                        tooltip: "Replace with new file";
+                                                        tooltip_above: true;
+                                                        clicked => {
+                                                            root.replace_attachment_requested(att.id);
                                                         }
                                                     }
 
-                                                    // Delete Button
-                                                    Rectangle {
-                                                        width: 24px;
-                                                        height: 24px;
-                                                        border-radius: 4px;
-                                                        background: del_att_touch.has-hover ? Theme.danger_subtle : Colors.transparent;
-                                                        z: del_att_touch.has-hover ? 50 : 1;
-
-                                                        del_att_touch := TouchArea {
-                                                            mouse-cursor: pointer;
-                                                            clicked => {
-                                                                root.delete_attachment_requested(att.id);
-                                                            }
-                                                        }
-
-                                                        Image {
-                                                            source: @image-url("../assets/icons/trash.svg");
-                                                            width: 13px;
-                                                            height: 13px;
-                                                            colorize: del_att_touch.has-hover ? Theme.danger : Theme.text_muted;
-                                                            x: (parent.width - self.width) / 2;
-                                                            y: (parent.height - self.height) / 2;
-                                                        }
-
-                                                        TooltipBubble {
-                                                            text: "Delete attachment";
-                                                            show: del_att_touch.has-hover;
-                                                            x: parent.width - self.width;
-                                                            y: -28px;
+                                                    att_del := IconButton {
+                                                        icon: @image-url("../assets/icons/trash.svg");
+                                                        size: 26px;
+                                                        icon_size: 13px;
+                                                        danger: true;
+                                                        icon_color: Theme.text_muted;
+                                                        tooltip: "Delete attachment";
+                                                        tooltip_above: true;
+                                                        tooltip_align_right: true;
+                                                        clicked => {
+                                                            root.delete_attachment_requested(att.id);
                                                         }
                                                     }
                                                 }
@@ -4233,9 +3769,9 @@ export component MainWindow inherits Window {
                         horizontal-alignment: center;
                     }
 
-                    Button {
+                    AppButton {
                         text: "Unlock Vault";
-                        primary: true;
+                        variant: "primary";
                         clicked => {
                             root.show_unlock_modal = true;
                         }
@@ -4274,6 +3810,7 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
     }
     }
     }
@@ -4436,6 +3973,8 @@ export component MainWindow inherits Window {
         main_window_hotkey <=> root.settings_main_window_hotkey;
         minimize_to_tray <=> root.settings_minimize_to_tray;
         launch_at_startup <=> root.settings_launch_at_startup;
+        auto_lock <=> root.settings_auto_lock;
+        clipboard_clear <=> root.settings_clipboard_clear;
         current_password <=> root.settings_cur_pwd;
         new_password <=> root.settings_new_pwd;
         confirm_password <=> root.settings_confirm_pwd;
@@ -4454,8 +3993,8 @@ export component MainWindow inherits Window {
         browse_path_clicked => {
             root.browse_vault_path_requested();
         }
-        save_settings(path, multithreading, theme, hotkey, main_hotkey, min_tray, launch_startup) => {
-            root.save_settings_requested(path, multithreading, theme, hotkey, main_hotkey, min_tray, launch_startup);
+        save_settings(path, multithreading, theme, hotkey, main_hotkey, min_tray, launch_startup, auto_lock, clipboard_clear) => {
+            root.save_settings_requested(path, multithreading, theme, hotkey, main_hotkey, min_tray, launch_startup, auto_lock, clipboard_clear);
         }
         change_password(cur, new_pwd, confirm) => {
             root.change_password_requested(cur, new_pwd, confirm);

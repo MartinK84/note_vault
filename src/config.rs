@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Expands environment variables in `s` (both `%VAR%` on Windows and `$VAR`/`${VAR}` on
-/// Unix-style syntax) and then resolves the result to an absolute path by joining it onto the
-/// current working directory when it is relative.
-pub fn expand_path(s: &str) -> PathBuf {
+/// Unix-style syntax) using `lookup` and resolves relative paths against the current working directory.
+pub fn expand_path_with<F>(s: &str, lookup: F) -> PathBuf
+where
+    F: Fn(&str) -> Option<String>,
+{
     // --- 1. Expand %VAR% placeholders (Windows style) ---
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -24,9 +26,9 @@ pub fn expand_path(s: &str) -> PathBuf {
             }
             if closed && !var_name.is_empty() {
                 // Look up the env var; fall back to the original token if not set
-                match std::env::var(&var_name) {
-                    Ok(val) => result.push_str(&val),
-                    Err(_) => {
+                match lookup(&var_name) {
+                    Some(val) => result.push_str(&val),
+                    None => {
                         result.push('%');
                         result.push_str(&var_name);
                         result.push('%');
@@ -63,9 +65,9 @@ pub fn expand_path(s: &str) -> PathBuf {
                 }
             }
             if !var_name.is_empty() {
-                match std::env::var(&var_name) {
-                    Ok(val) => result.push_str(&val),
-                    Err(_) => {
+                match lookup(&var_name) {
+                    Some(val) => result.push_str(&val),
+                    None => {
                         if braced {
                             result.push_str("${");
                             result.push_str(&var_name);
@@ -91,6 +93,13 @@ pub fn expand_path(s: &str) -> PathBuf {
     } else {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(p)
     }
+}
+
+/// Expands environment variables in `s` (both `%VAR%` on Windows and `$VAR`/`${VAR}` on
+/// Unix-style syntax) and then resolves the result to an absolute path by joining it onto the
+/// current working directory when it is relative.
+pub fn expand_path(s: &str) -> PathBuf {
+    expand_path_with(s, |k| std::env::var(k).ok())
 }
 
 fn default_multithreading() -> bool {
@@ -141,6 +150,10 @@ fn default_notes_pane_width() -> u32 {
     300
 }
 
+fn default_clipboard_clear_seconds() -> u32 {
+    30
+}
+
 /// Persistent configuration for NoteVault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -188,6 +201,12 @@ pub struct AppConfig {
 
     #[serde(default = "default_notes_pane_width")]
     pub notes_pane_width: u32,
+
+    #[serde(default)]
+    pub auto_lock_minutes: u32,
+
+    #[serde(default = "default_clipboard_clear_seconds")]
+    pub clipboard_clear_seconds: u32,
 }
 
 impl Default for AppConfig {
@@ -208,6 +227,8 @@ impl Default for AppConfig {
             launch_at_startup: false,
             folder_pane_width: default_folder_pane_width(),
             notes_pane_width: default_notes_pane_width(),
+            auto_lock_minutes: 0,
+            clipboard_clear_seconds: default_clipboard_clear_seconds(),
         }
     }
 }
@@ -238,15 +259,10 @@ impl AppConfig {
         self.save_to_path(Path::new(Self::CONFIG_FILE))
     }
 
-    /// Saves configuration to a specific path.
+    /// Saves configuration atomically to a specific path.
     pub fn save_to_path(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let json_data = serde_json::to_string_pretty(self)?;
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
-        }
-        fs::write(path, json_data)?;
+        crate::atomic_write(path, json_data.as_bytes())?;
         Ok(())
     }
 
@@ -286,6 +302,8 @@ mod tests {
         assert!(!config.launch_at_startup);
         assert_eq!(config.folder_pane_width, 210);
         assert_eq!(config.notes_pane_width, 300);
+        assert_eq!(config.auto_lock_minutes, 0);
+        assert_eq!(config.clipboard_clear_seconds, 30);
     }
 
     #[test]
@@ -309,6 +327,8 @@ mod tests {
             launch_at_startup: true,
             folder_pane_width: 250,
             notes_pane_width: 350,
+            auto_lock_minutes: 15,
+            clipboard_clear_seconds: 60,
         };
 
         config.save_to_path(&config_path).expect("Saving config should succeed");
@@ -344,6 +364,8 @@ mod tests {
         assert!(!loaded.launch_at_startup);
         assert_eq!(loaded.folder_pane_width, 210);
         assert_eq!(loaded.notes_pane_width, 300);
+        assert_eq!(loaded.auto_lock_minutes, 0);
+        assert_eq!(loaded.clipboard_clear_seconds, 30);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -384,10 +406,9 @@ mod tests {
 
     #[test]
     fn test_expand_path_percent_var() {
-        // Set a known env var and confirm %VAR% is expanded.
-        unsafe { std::env::set_var("NV_TEST_VAR", "expanded_value"); }
-        let result = expand_path("%NV_TEST_VAR%\\subdir");
-        unsafe { std::env::remove_var("NV_TEST_VAR"); }
+        let result = expand_path_with("%NV_TEST_VAR%\\subdir", |k| {
+            (k == "NV_TEST_VAR").then(|| "expanded_value".to_string())
+        });
         let result_str = result.to_string_lossy();
         assert!(
             result_str.contains("expanded_value"),
@@ -398,9 +419,9 @@ mod tests {
 
     #[test]
     fn test_expand_path_dollar_var() {
-        unsafe { std::env::set_var("NV_TEST_VAR2", "dollar_expanded"); }
-        let result = expand_path("$NV_TEST_VAR2/subdir");
-        unsafe { std::env::remove_var("NV_TEST_VAR2"); }
+        let result = expand_path_with("$NV_TEST_VAR2/subdir", |k| {
+            (k == "NV_TEST_VAR2").then(|| "dollar_expanded".to_string())
+        });
         let result_str = result.to_string_lossy();
         assert!(
             result_str.contains("dollar_expanded"),
@@ -411,9 +432,9 @@ mod tests {
 
     #[test]
     fn test_expand_path_dollar_braced_var() {
-        unsafe { std::env::set_var("NV_TEST_VAR3", "braced_expanded"); }
-        let result = expand_path("${NV_TEST_VAR3}/subdir");
-        unsafe { std::env::remove_var("NV_TEST_VAR3"); }
+        let result = expand_path_with("${NV_TEST_VAR3}/subdir", |k| {
+            (k == "NV_TEST_VAR3").then(|| "braced_expanded".to_string())
+        });
         let result_str = result.to_string_lossy();
         assert!(
             result_str.contains("braced_expanded"),
@@ -425,7 +446,7 @@ mod tests {
     #[test]
     fn test_expand_path_unknown_var_kept_verbatim() {
         // An unknown %VAR% should be left as-is in the output.
-        let result = expand_path("%DEFINITELY_NOT_SET_NV_VAR%\\subdir");
+        let result = expand_path_with("%DEFINITELY_NOT_SET_NV_VAR%\\subdir", |_| None);
         let result_str = result.to_string_lossy();
         assert!(
             result_str.contains("DEFINITELY_NOT_SET_NV_VAR"),

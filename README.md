@@ -1,26 +1,26 @@
 # NoteVault
 
-A local-first, encrypted note-taking desktop application written in Rust. Notes are stored as individual encrypted `.vault` files on disk and never depend on a shared database, which makes them straightforward to back up or synchronize with standard file-sync tools such as Nextcloud or ownCloud.
+A local-first, encrypted desktop note-taking application written in Rust. Notes, attachments, and canvas drawings are stored as individual encrypted `.vault` files on disk and never depend on a shared database, which makes them straightforward to back up or synchronize with standard file-sync tools such as Nextcloud or ownCloud.
 
 ## Features
 
 ### Encryption
-- Each note is stored as a separate `.vault` file. Files are independent of each other, so there are no merge conflicts during cloud sync and a corrupted file does not affect the rest of the vault.
-- **Cryptographic Cascade (Defense in Depth):** Cascaded authenticated encryption combining **AES-256-GCM** (inner layer) and **XChaCha20-Poly1305** (outer layer). Both ciphers must be broken simultaneously to compromise note confidentiality.
-- **Key Derivation & Keyfile Support:** [Argon2id](https://en.wikipedia.org/wiki/Argon2) derives 64 bytes of key material (32 bytes for AES-256-GCM and 32 bytes for XChaCha20-Poly1305) with a unique 32-byte random salt per file. When a physical Keyfile is provided, its [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) hash is passed as a pepper (`secret`) into Argon2id, acting as a second factor against offline brute-force attacks.
-- **Backward Compatibility:** Seamlessly decrypts legacy format (`0x01` / 56-byte header with single XChaCha20-Poly1305) notes, automatically upgrading them to the cascaded version `0x02` upon the next save.
-- **Memory Hygiene:** The [`zeroize`](https://crates.io/crates/zeroize) crate is used to overwrite master passwords, keyfile buffers, derived keys, and decrypted plaintext in memory as soon as they are no longer needed.
+- Each note, attachment, and canvas drawing is stored as an independent `.vault` file. Files are self-contained, so there are no shared-database merge conflicts during cloud sync and a corrupted file does not affect the rest of the vault.
+- **Cryptographic Cascade (Defense in Depth):** Cascaded authenticated encryption combining **AES-256-GCM** (inner layer) and **XChaCha20-Poly1305** (outer layer). Both ciphers must be broken simultaneously to compromise confidentiality.
+- **Authenticated Header & Explicit KDF Params (`0x03`):** Each `.vault` file uses an 81-byte header storing explicit Argon2id parameters (`m_cost`, `t_cost`, `p_cost`), a unique 32-byte random salt, and separate random nonces (`12B` + `24B`), bound as Additional Authenticated Data (AAD) on both AEAD layers.
+- **Key Derivation & Keyfile Support:** [Argon2id](https://en.wikipedia.org/wiki/Argon2) derives 64 bytes of key material (32 bytes for AES-256-GCM and 32 bytes for XChaCha20-Poly1305). When a physical Keyfile is provided, its [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) hash is passed as a pepper (`secret`) into Argon2id as a second factor against offline brute-force attacks.
+- **Atomic File Writes & Backward Compatibility:** Writes use temp-file + fsync + atomic rename. Transparently decrypts legacy v1 (`56B` header) and cascade v2 (`0x02` / `69B` header) files, automatically upgrading them to `0x03` on next save or atomic re-encryption.
+- **Memory Hygiene:** [`zeroize`](https://crates.io/crates/zeroize) (`Zeroizing` and `ZeroizeOnDrop`) overwrites master passwords, keyfile buffers, derived keys, and decrypted note/attachment data in memory on drop.
 
 ### Desktop GUI (`note_vault`)
-- Three-panel layout: folder/category sidebar, note list, and editor.
-- Notes can be organized into categories (mapped to subdirectories inside the vault folder).
-- Tags are stored as metadata inside each encrypted file and are searchable without decrypting the full note body (metadata is decrypted on load; content is only decrypted on demand).
-- Search across note titles and tags.
-- **Quick Search overlay** — a small floating window accessible via a configurable global hotkey (default `Shift+Space`). It shows the five most recently updated notes matching the query and lets you open one in the main window.
-- **Keyfile Management** — Easily add, change, or remove a keyfile from the Settings dialog with real-time atomic re-encryption of all notes. If a keyfile is moved or missing, the unlock dialog provides a direct file locator.
-- System tray icon with a context menu; the main window can be minimized to tray.
-- Note export to Markdown (with YAML front matter), plain text, and JSON.
-- Light and dark themes.
+- Three-panel layout with resizable folder/category sidebar, note list, and editor/canvas pane.
+- **Markdown Editor & Preview:** GFM tables rendered with Unicode box drawing, task lists, code blocks, sanitized HTML, and LaTeX-to-Unicode math rendering.
+- **Canvas / Drawing Notes:** `tiny-skia`-backed drawing notes with pen/eraser tools, solid/dashed/dotted strokes, custom HSL color picker, zoom/fit/pan, canvas extension, Windows stylus & palm rejection, and 30-step Undo/Redo (`Ctrl+Z` / `Ctrl+Y`).
+- **Encrypted Attachments:** Attach, preview (images and text), replace, extract, and delete files encrypted alongside their parent note (`<note_id>_a<N>.vault`).
+- **Quick Search & Global Hotkeys:** Floating overlay (`Shift+Space`) to copy or open notes, plus a main-window toggle hotkey (`Control+Shift+Space`).
+- **Security Controls:** Configurable **Idle Auto-Lock** timeout and **Clipboard Auto-Clear** timer (clears clipboard automatically only if it still holds the copied note content).
+- **Keyfile & Password Management:** Add, change, or remove a keyfile or rotate the master password from Settings with parallel atomic re-encryption across all vault files.
+- **System Tray & Export:** Minimize to tray, launch at startup, dark/blue/light themes, and export to Markdown (YAML frontmatter), plain text, and JSON.
 
 ### CLI (`note_vault_cli`)
 A companion command-line tool for scripting and automation:
@@ -35,7 +35,7 @@ Passphrases are read securely from the terminal (no echo) using [`rpassword`](ht
 
 ## Configuration
 
-On first run the GUI reads `config.json` from the working directory. An example with all available keys:
+On first run the GUI reads `config.json` from the working directory. An example with all available keys and defaults:
 
 ```json
 {
@@ -44,28 +44,40 @@ On first run the GUI reads `config.json` from the working directory. An example 
   "use_multithreading": true,
   "theme": "dark",
   "global_hotkey": "Shift+Space",
-  "minimize_to_tray": false,
-  "editor_show_line_numbers": true,
+  "main_window_hotkey": "Control+Shift+Space",
+  "minimize_to_tray": true,
+  "editor_show_line_numbers": false,
   "editor_line_wrap": true,
   "editor_highlight_current_line": true,
   "editor_font_size": 14,
-  "launch_at_startup": false
+  "editor_markdown_mode": false,
+  "launch_at_startup": false,
+  "folder_pane_width": 210,
+  "notes_pane_width": 300,
+  "auto_lock_minutes": 0,
+  "clipboard_clear_seconds": 30
 }
 ```
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `vault_path` | string | Absolute path to the directory where `.vault` files are stored. |
+| `vault_path` | string | Path to the directory where `.vault` files are stored (supports `%VAR%`, `$VAR`, `${VAR}`). |
 | `keyfile_path` | string \| `null` | Optional path to a physical keyfile used as a second factor. |
-| `use_multithreading` | bool | Load notes in parallel using Rayon. Useful for large vaults. |
-| `theme` | `"dark"` \| `"light"` \| `"blue"` | UI color theme. |
-| `global_hotkey` | string | System-wide hotkey to show/hide the Quick Search window (e.g. `"Shift+Space"`, `"Control+Shift+N"`). |
-| `minimize_to_tray` | bool | Minimize the main window to the system tray instead of the taskbar. |
-| `editor_show_line_numbers` | bool | Show line numbers in the note editor. |
-| `editor_line_wrap` | bool | Wrap long lines in the editor. |
-| `editor_highlight_current_line` | bool | Highlight the line the cursor is on. |
-| `editor_font_size` | integer | Editor font size in points. |
+| `use_multithreading` | bool | Load and re-encrypt notes in parallel using Rayon. |
+| `theme` | `"dark"` \| `"blue"` \| `"light"` | UI color theme. |
+| `global_hotkey` | string | System-wide hotkey to show/hide the Quick Search window (default `"Shift+Space"`). |
+| `main_window_hotkey` | string | System-wide hotkey to show/hide/minimize the main window (default `"Control+Shift+Space"`). |
+| `minimize_to_tray` | bool | Minimize the main window to the system tray instead of the taskbar (default `true`). |
+| `editor_show_line_numbers` | bool | Show line numbers in the note editor (default `false`). |
+| `editor_line_wrap` | bool | Wrap long lines in the editor (default `true`). |
+| `editor_highlight_current_line` | bool | Highlight the line the cursor is on (default `true`). |
+| `editor_font_size` | integer | Editor font size in points (default `14`). |
+| `editor_markdown_mode` | bool | Default Markdown preview toggle state (default `false`). |
 | `launch_at_startup` | bool | Register NoteVault to launch automatically on system startup (minimized if `minimize_to_tray` is enabled). |
+| `folder_pane_width` | integer | Width of the folders sidebar in pixels (default `210`). |
+| `notes_pane_width` | integer | Width of the notes list column in pixels (default `300`). |
+| `auto_lock_minutes` | integer | Automatically lock the vault after N minutes of inactivity (`0` = disabled). |
+| `clipboard_clear_seconds` | integer | Clear copied note text from the clipboard after N seconds (`0` = disabled, default `30`). |
 
 The `--vault-path` command-line flag overrides `vault_path` from `config.json` for a single session.
 
@@ -75,13 +87,9 @@ The `--vault-path` command-line flag overrides `vault_path` from `config.json` f
 - [Rust toolchain](https://rustup.rs/) (stable, edition 2024)
 - On Windows, a MSVC-compatible linker is required (installed as part of [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)).
 
-### Debug build
+### Debug & Release builds
 ```powershell
 cargo build
-```
-
-### Release build
-```powershell
 cargo build --release
 ```
 
@@ -103,8 +111,6 @@ The compiled binaries are placed in `target\release\`:
 
 ## Testing
 
-NoteVault features a comprehensive automated test suite covering unit tests, cryptographic cascade verification, validation and sanitization, note export formatting, and end-to-end vault integration workflows.
-
 ### Running all tests
 ```powershell
 cargo test
@@ -112,26 +118,20 @@ cargo test
 
 ### Running specific test suites
 ```powershell
-# Core library unit tests (cryptography, cascade AEAD, config, export, validation)
+# Core library unit tests (cryptography v1/v2/v3, cascade AEAD, config, export, validation)
 cargo test --lib
 
-# Desktop GUI binary tests (hotkey parsing, tray icon, search filtering)
+# Desktop GUI binary tests (hotkey parsing, tray icon, search filtering, canvas undo/redo)
 cargo test --bin note_vault
 
 # CLI binary tests (argument parsing, flags, subcommands)
 cargo test --bin note_vault_cli
 
-# Vault integration tests (lifecycle, atomic re-encryption, header resilience)
+# Integration test suites
 cargo test --test vault_integration
-
-# Export and validation integration tests
+cargo test --test attachment_integration
+cargo test --test canvas_integration
 cargo test --test export_and_validation
-```
-
-### Running tests with output
-To view console prints or detailed progress logs during test execution:
-```powershell
-cargo test -- --nocapture
 ```
 
 ## Creating a Release Archive
@@ -142,12 +142,7 @@ A PowerShell script is provided to build the project and package the release bin
 .\scripts\make_release.ps1
 ```
 
-The script:
-1. Reads the version from `Cargo.toml`.
-2. Runs `cargo build --release`.
-3. Collects `note_vault.exe`, `note_vault_cli.exe`, and `config.json` into a zip archive named `note_vault-<version>-windows-x86_64.zip` in the project root.
-
-Run it from the project root directory.
+The script reads the version from `Cargo.toml`, runs `cargo build --release`, and collects `note_vault.exe`, `note_vault_cli.exe`, and `config.json` (if present) into `note_vault-<version>-windows-x86_64.zip` in the project root.
 
 ## License
 

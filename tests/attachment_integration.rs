@@ -222,7 +222,7 @@ fn test_attachment_preview_and_type_resolution() {
     assert!(is_text_filename(&loaded1.file_name));
     assert!(is_text_data(&loaded1.data));
     assert!(!is_image_filename(&loaded1.file_name));
-    let decoded_text = String::from_utf8(loaded1.data).unwrap();
+    let decoded_text = String::from_utf8(loaded1.data.clone()).unwrap();
     assert_eq!(decoded_text, text_content);
 
     let loaded2 = load_attachment_decrypted(password, None, &att2_path).unwrap();

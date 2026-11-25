@@ -1,0 +1,180 @@
+import { Theme, TooltipBubble } from "theme.slint";
+
+export component AppButton inherits Rectangle {
+    in property <string> text: "";
+    // "primary" | "secondary" | "danger" | "ghost"
+    in property <string> variant: "secondary";
+    in property <bool> compact: false;
+    in property <bool> enabled: true;
+    in property <bool> show_icon: false;
+    in property <image> icon;
+    in property <length> icon_size: 14px;
+    in property <bool> active: false;
+    in property <string> tooltip: "";
+    in property <bool> tooltip_align_right: false;
+    in property <bool> tooltip_above: false;
+
+    out property <bool> hovered: touch.has-hover;
+
+    callback clicked();
+
+    private property <color> fg_color:
+        root.variant == "primary" ? Theme.accent_text :
+        (root.variant == "danger" ? Theme.danger_text : Theme.text_primary);
+
+    height: root.compact ? Theme.btn_height_sm : Theme.btn_height;
+    min-width: root.compact ? 0px : 80px;
+    border-radius: Theme.radius_sm;
+    border-width: root.variant == "secondary" ? 1px : 0px;
+    border-color: root.active ? Theme.accent : (touch.has-hover && root.enabled ? Theme.border_active : Theme.border);
+    background:
+        root.variant == "primary" ? (touch.has-hover && root.enabled ? Theme.accent_hover : Theme.accent) :
+        (root.variant == "danger" ? (touch.has-hover && root.enabled ? Theme.danger_hover : Theme.danger) :
+        (root.variant == "ghost" ? (root.active ? Theme.bg_active : (touch.has-hover && root.enabled ? Theme.hover : Colors.transparent)) :
+        (root.active ? Theme.bg_active : (touch.has-hover && root.enabled ? Theme.hover : Theme.bg_secondary))));
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background { duration: 120ms; }
+
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if root.enabled {
+                root.clicked();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.compact ? 10px : 14px;
+        padding-right: root.compact ? 10px : 14px;
+        spacing: 6px;
+        alignment: center;
+        cross-axis-alignment: center;
+
+        if root.show_icon : Image {
+            source: root.icon;
+            width: root.icon_size;
+            height: root.icon_size;
+            colorize: root.fg_color;
+        }
+
+        if root.text != "" : Text {
+            text: root.text;
+            font-size: Theme.font_sm;
+            font-weight: (root.variant == "primary" || root.variant == "danger") ? 600 : 500;
+            color: root.fg_color;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+
+    if root.tooltip != "" : TooltipBubble {
+        text: root.tooltip;
+        show: touch.has-hover && root.enabled;
+        x: root.tooltip_align_right ? (parent.width - self.width) : (parent.width - self.width) / 2;
+        y: root.tooltip_above ? (-self.height - 4px) : (parent.height + 4px);
+    }
+}
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <length> size: Theme.icon_btn_size;
+    in property <length> icon_size: 14px;
+    in property <bool> active: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    in property <color> icon_color: Theme.text_secondary;
+    in property <color> icon_hover_color: Theme.text_primary;
+    in property <color> icon_active_color: Theme.accent;
+    in property <string> tooltip: "";
+    in property <bool> tooltip_align_right: false;
+    in property <bool> tooltip_above: false;
+
+    out property <bool> hovered: touch.has-hover;
+
+    callback clicked();
+
+    width: root.size;
+    height: root.size;
+    border-radius: Theme.radius_sm;
+    border-width: root.active ? 1px : 0px;
+    border-color: Theme.accent;
+    background: root.active ? Theme.bg_active : (touch.has-hover && root.enabled ? (root.danger ? Theme.danger_subtle : Theme.hover) : Colors.transparent);
+    opacity: root.enabled ? 1.0 : 0.45;
+    animate background { duration: 120ms; }
+
+    touch := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            if root.enabled {
+                root.clicked();
+            }
+        }
+    }
+
+    Image {
+        source: root.icon;
+        width: root.icon_size;
+        height: root.icon_size;
+        colorize: root.active ? root.icon_active_color : (touch.has-hover && root.enabled ? (root.danger ? Theme.danger : root.icon_hover_color) : root.icon_color);
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    if root.tooltip != "" : TooltipBubble {
+        text: root.tooltip;
+        show: touch.has-hover && root.enabled;
+        x: root.tooltip_align_right ? (parent.width - self.width) : 0px;
+        y: root.tooltip_above ? (-self.height - 4px) : (parent.height + 4px);
+    }
+}
+
+export component ModalCloseButton inherits IconButton {
+    icon: @image-url("../assets/icons/x.svg");
+    size: 28px;
+    icon_size: 14px;
+}
+
+export component ModalHeader inherits HorizontalLayout {
+    in property <string> title: "";
+    in property <bool> show_icon: false;
+    in property <image> icon;
+    in property <color> icon_color: Theme.accent;
+    in property <bool> show_close: true;
+
+    callback close_clicked();
+
+    alignment: space-between;
+    cross-axis-alignment: center;
+    spacing: Theme.space_sm;
+
+    HorizontalLayout {
+        spacing: Theme.space_sm;
+        alignment: start;
+        cross-axis-alignment: center;
+        horizontal-stretch: 1;
+
+        if root.show_icon : Image {
+            source: root.icon;
+            width: 18px;
+            height: 18px;
+            colorize: root.icon_color;
+        }
+
+        Text {
+            text: root.title;
+            font-size: Theme.font_lg;
+            font-weight: 700;
+            color: Theme.text_primary;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+
+    if root.show_close : ModalCloseButton {
+        clicked => {
+            root.close_clicked();
+        }
+    }
+}

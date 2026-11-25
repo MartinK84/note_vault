@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
     name = "note_vault",
     version,
     about = "A highly secure, local-first encrypted note-taking vault CLI",
-    long_about = "NoteVault securely encrypts and decrypts notes using Argon2id for key derivation, XChaCha20-Poly1305 for authenticated encryption, and Zeroize for memory safety."
+    long_about = "NoteVault securely encrypts and decrypts notes using Argon2id (with optional BLAKE3 keyfile pepper), an AES-256-GCM + XChaCha20-Poly1305 cryptographic cascade with authenticated headers, and Zeroize for memory safety."
 )]
 struct Cli {
     #[command(subcommand)]

@@ -1,5 +1,6 @@
-import { Button, LineEdit, ComboBox, CheckBox, ProgressIndicator, Palette } from "std-widgets.slint";
+import { LineEdit, ComboBox, CheckBox, ProgressIndicator, Palette, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
+import { AppButton, ModalHeader } from "components.slint";
 
 export component SettingsDialog inherits Rectangle {
     init => {
@@ -24,6 +25,10 @@ export component SettingsDialog inherits Rectangle {
     in-out property <bool> is_recording_hotkey: false;
     in-out property <bool> is_recording_main_hotkey: false;
     in property <bool> is_vault_locked: true;
+    in-out property <string> auto_lock: "Disabled";
+    in property <[string]> auto_lock_options: ["Disabled", "5 min", "10 min", "15 min", "30 min", "60 min"];
+    in-out property <string> clipboard_clear: "30 sec";
+    in property <[string]> clipboard_clear_options: ["Disabled", "15 sec", "30 sec", "60 sec", "120 sec"];
 
     // Password Change Properties
     in-out property <string> current_password: "";
@@ -45,7 +50,7 @@ export component SettingsDialog inherits Rectangle {
 
     // Callbacks
     callback browse_path_clicked();
-    callback save_settings(string, bool, string, string, string, bool, bool);
+    callback save_settings(string, bool, string, string, string, bool, bool, string, string);
     callback change_password(string, string, string);
     callback browse_new_keyfile();
     callback update_keyfile(string, string, bool);
@@ -53,689 +58,823 @@ export component SettingsDialog inherits Rectangle {
     callback record_key_event(string, bool, bool, bool, bool) -> string;
     callback close_clicked();
 
-    TouchArea {}
+    TouchArea {
+        clicked => {
+            if !root.is_reencrypting && !root.is_keyfile_reencrypting {
+                root.is_recording_hotkey = false;
+                root.is_recording_main_hotkey = false;
+                root.close_clicked();
+            }
+        }
+    }
 
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 700px;
-        height: content_layout.preferred-height;
+        width: min(parent.width - 48px, Theme.modal_width_lg);
+        height: min(parent.height - 48px, header_box.preferred-height + body_content.preferred-height + footer_box.preferred-height + 2px);
         background: Theme.bg_surface;
-        border-radius: 12px;
+        border-radius: Theme.radius_lg;
         border-width: 1px;
         border-color: Theme.border_active;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000040;
+        drop-shadow-offset-y: 8px;
         clip: true;
 
-        content_layout := VerticalLayout {
-            padding-top: 16px;
-            padding-bottom: 16px;
-            padding-left: 24px;
-            padding-right: 24px;
-            spacing: 12px;
-            alignment: start;
+        TouchArea {}
 
-            // Dialog Header Bar
-            HorizontalLayout {
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: start;
-                    cross-axis-alignment: center;
-                    horizontal-stretch: 1;
+        VerticalLayout {
+            padding: 0px;
+            spacing: 0px;
 
-                    Image {
-                        source: @image-url("../assets/icons/settings.svg");
-                        width: 18px;
-                        height: 18px;
-                        colorize: Theme.text_primary;
-                    }
+            // Pinned Header
+            header_box := VerticalLayout {
+                padding-top: 16px;
+                padding-bottom: 14px;
+                padding-left: Theme.modal_pad_x;
+                padding-right: Theme.modal_pad_x;
 
-                    Text {
-                        text: "Settings";
-                        font-size: 18px;
-                        font-weight: 700;
-                        color: Theme.text_primary;
-                        vertical-alignment: center;
-                    }
-                }
-
-                Rectangle {
-                    width: 28px;
-                    height: 28px;
-                    border-radius: 6px;
-                    background: close_touch.has-hover ? Theme.hover : Colors.transparent;
-
-                    close_touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.close_clicked();
-                        }
-                    }
-
-                    Image {
-                        source: @image-url("../assets/icons/x.svg");
-                        width: 14px;
-                        height: 14px;
-                        colorize: close_touch.has-hover ? Theme.text_primary : Theme.text_secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                ModalHeader {
+                    title: "Settings";
+                    show_icon: true;
+                    icon: @image-url("../assets/icons/settings.svg");
+                    icon_color: Theme.accent;
+                    show_close: !root.is_reencrypting && !root.is_keyfile_reencrypting;
+                    close_clicked => {
+                        root.is_recording_hotkey = false;
+                        root.is_recording_main_hotkey = false;
+                        root.close_clicked();
                     }
                 }
             }
 
-            // Section 1: Vault Location
-            VerticalLayout {
-                spacing: 6px;
-
-                Text {
-                    text: "Vault Directory";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Theme.text_secondary;
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-
-                    LineEdit {
-                        text: root.vault_path;
-                        font-size: 13px;
-                        enabled: false;
-                        horizontal-stretch: 1;
-                    }
-
-                    Button {
-                        text: "Browse...";
-                        clicked => {
-                            root.browse_path_clicked();
-                        }
-                    }
-                }
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
             }
 
-            // Section 2: Preferences (Decryption, Tray, Hotkey & Theme)
-            VerticalLayout {
-                spacing: 10px;
+            // Scrollable Body
+            body_scroll := ScrollView {
+                vertical-stretch: 1;
+                content-width: self.visible-width;
+                content-height: body_content.preferred-height;
 
-                CheckBox {
-                    text: "Use multi-core decryption";
-                    checked <=> root.use_multithreading;
-                }
-
-                CheckBox {
-                    text: "Minimize to tray icon";
-                    checked <=> root.minimize_to_tray;
-                }
-
-                CheckBox {
-                    text: "Launch at startup";
-                    checked <=> root.launch_at_startup;
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    cross-axis-alignment: center;
-
-                    Text {
-                        width: 145px;
-                        text: "Quick Search Hotkey:";
-                        font-size: 13px;
-                        color: Theme.text_primary;
-                        vertical-alignment: center;
-                    }
-
-                    record_scope := FocusScope {
-                        horizontal-stretch: 1;
-                        height: 32px;
-
-                        key-pressed(event) => {
-                            if root.is_recording_hotkey {
-                                if event.text == Key.Escape {
-                                    root.is_recording_hotkey = false;
-                                    return accept;
-                                }
-                                let detected = root.record_key_event(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
-                                if detected != "" {
-                                    root.global_hotkey = detected;
-                                    root.is_recording_hotkey = false;
-                                }
-                                return accept;
-                            }
-                            reject
-                        }
-
-                        Rectangle {
-                            width: 100%;
-                            height: 100%;
-                            background: root.is_recording_hotkey ? Theme.bg_active : Theme.bg_secondary;
-                            border-radius: 6px;
-                            border-width: 1.5px;
-                            border-color: root.is_recording_hotkey ? Theme.accent : Theme.border;
-
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 8px;
-                                spacing: 8px;
-                                cross-axis-alignment: center;
-
-                                Image {
-                                    source: @image-url("../assets/icons/search.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.is_recording_hotkey ? Theme.accent : Theme.text_secondary;
-                                }
-
-                                Text {
-                                    text: root.is_recording_hotkey ? "Press shortcut on keyboard (e.g. Shift+Space)..." : root.global_hotkey;
-                                    font-size: 13px;
-                                    font-weight: root.is_recording_hotkey ? 600 : 700;
-                                    color: root.is_recording_hotkey ? Theme.accent : Theme.text_primary;
-                                    horizontal-stretch: 1;
-                                    vertical-alignment: center;
-                                }
-
-                                if !root.is_recording_hotkey : Rectangle {
-                                    width: 65px;
-                                    height: 22px;
-                                    border-radius: 4px;
-                                    background: Theme.hover;
-
-                                    Text {
-                                        text: "Record";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: Theme.text_primary;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                if root.is_recording_hotkey : Rectangle {
-                                    width: 60px;
-                                    height: 22px;
-                                    border-radius: 4px;
-                                    background: Theme.danger;
-
-                                    Text {
-                                        text: "Cancel";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: Theme.danger_text;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.is_recording_hotkey = !root.is_recording_hotkey;
-                                    root.is_recording_main_hotkey = false;
-                                    if root.is_recording_hotkey {
-                                        record_scope.focus();
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Button {
-                        text: "Reset";
-                        clicked => {
-                            root.global_hotkey = "Shift+Space";
-                            root.is_recording_hotkey = false;
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    cross-axis-alignment: center;
-
-                    Text {
-                        width: 145px;
-                        text: "Main Window Hotkey:";
-                        font-size: 13px;
-                        color: Theme.text_primary;
-                        vertical-alignment: center;
-                    }
-
-                    record_main_scope := FocusScope {
-                        horizontal-stretch: 1;
-                        height: 32px;
-
-                        key-pressed(event) => {
-                            if root.is_recording_main_hotkey {
-                                if event.text == Key.Escape {
-                                    root.is_recording_main_hotkey = false;
-                                    return accept;
-                                }
-                                let detected = root.record_key_event(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
-                                if detected != "" {
-                                    root.main_window_hotkey = detected;
-                                    root.is_recording_main_hotkey = false;
-                                }
-                                return accept;
-                            }
-                            reject
-                        }
-
-                        Rectangle {
-                            width: 100%;
-                            height: 100%;
-                            background: root.is_recording_main_hotkey ? Theme.bg_active : Theme.bg_secondary;
-                            border-radius: 6px;
-                            border-width: 1.5px;
-                            border-color: root.is_recording_main_hotkey ? Theme.accent : Theme.border;
-
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 8px;
-                                spacing: 8px;
-                                cross-axis-alignment: center;
-
-                                Image {
-                                    source: @image-url("../assets/icons/layers.svg");
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.is_recording_main_hotkey ? Theme.accent : Theme.text_secondary;
-                                }
-
-                                Text {
-                                    text: root.is_recording_main_hotkey ? "Press shortcut on keyboard (e.g. Ctrl+Shift+Space)..." : root.main_window_hotkey;
-                                    font-size: 13px;
-                                    font-weight: root.is_recording_main_hotkey ? 600 : 700;
-                                    color: root.is_recording_main_hotkey ? Theme.accent : Theme.text_primary;
-                                    horizontal-stretch: 1;
-                                    vertical-alignment: center;
-                                }
-
-                                if !root.is_recording_main_hotkey : Rectangle {
-                                    width: 65px;
-                                    height: 22px;
-                                    border-radius: 4px;
-                                    background: Theme.hover;
-
-                                    Text {
-                                        text: "Record";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: Theme.text_primary;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                if root.is_recording_main_hotkey : Rectangle {
-                                    width: 60px;
-                                    height: 22px;
-                                    border-radius: 4px;
-                                    background: Theme.danger;
-
-                                    Text {
-                                        text: "Cancel";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: Theme.danger_text;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.is_recording_main_hotkey = !root.is_recording_main_hotkey;
-                                    root.is_recording_hotkey = false;
-                                    if root.is_recording_main_hotkey {
-                                        record_main_scope.focus();
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Button {
-                        text: "Reset";
-                        clicked => {
-                            root.main_window_hotkey = "Control+Shift+Space";
-                            root.is_recording_main_hotkey = false;
-                        }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 12px;
+                body_content := VerticalLayout {
+                    width: body_scroll.visible-width;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    padding-left: Theme.modal_pad_x;
+                    padding-right: Theme.modal_pad_x;
+                    spacing: 16px;
                     alignment: start;
 
-                    Text {
-                        text: "Theme:";
-                        font-size: 13px;
-                        color: Theme.text_primary;
-                        vertical-alignment: center;
-                    }
-
-                    ComboBox {
-                        width: 140px;
-                        height: 28px;
-                        model: root.theme_options;
-                        current-value: root.theme;
-                        selected(val) => {
-                            root.theme = val;
-                            Theme.theme = val;
-                            Theme.is_dark = (val != "light");
-                            Palette.color-scheme = (val != "light") ? ColorScheme.dark : ColorScheme.light;
-                            root.theme_changed(val);
-                        }
-                    }
-                }
-            }
-
-            // Section 3: Password Change Box
-            Rectangle {
-                background: Theme.bg_secondary;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: Theme.border;
-                opacity: root.is_vault_locked ? 0.55 : 1.0;
-
-                VerticalLayout {
-                    padding: 14px;
-                    spacing: 10px;
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        cross-axis-alignment: center;
-
-                        Image {
-                            source: @image-url("../assets/icons/lock.svg");
-                            width: 14px;
-                            height: 14px;
-                            colorize: Theme.text_primary;
-                        }
-
-                        Text {
-                            text: "Change Master Password";
-                            font-size: 13px;
-                            font-weight: 700;
-                            color: Theme.text_primary;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    if root.is_vault_locked : Text {
-                        text: "🔒 Vault is locked. Unlock the vault to change the master password.";
-                        font-size: 11px;
-                        font-weight: 600;
-                        color: Theme.accent;
-                        wrap: word-wrap;
-                    }
-
-                    if !root.is_vault_locked : Text {
-                        text: "Changing your master password will re-encrypt all notes with the new password.";
-                        font-size: 11px;
-                        color: Theme.text_secondary;
-                        wrap: word-wrap;
-                    }
-
-                    HorizontalLayout {
+                    // Section 1: Vault Storage
+                    VerticalLayout {
                         spacing: 8px;
 
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 3px;
-
-                            Text {
-                                text: "Current Password";
-                                font-size: 11px;
-                                color: Theme.text_secondary;
-                            }
-
-                            cur_pwd := LineEdit {
-                                text <=> root.current_password;
-                                input-type: InputType.password;
-                                font-size: 12px;
-                                placeholder-text: root.is_vault_locked ? "Vault locked" : "Current password...";
-                                enabled: !root.is_vault_locked && !root.is_reencrypting;
-                            }
-                        }
-
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 3px;
-
-                            Text {
-                                text: "New Password";
-                                font-size: 11px;
-                                color: Theme.text_secondary;
-                            }
-
-                            new_pwd := LineEdit {
-                                text <=> root.new_password;
-                                input-type: InputType.password;
-                                font-size: 12px;
-                                placeholder-text: root.is_vault_locked ? "Vault locked" : "New password...";
-                                enabled: !root.is_vault_locked && !root.is_reencrypting;
-                            }
-                        }
-
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 3px;
-
-                            Text {
-                                text: "Confirm New";
-                                font-size: 11px;
-                                color: Theme.text_secondary;
-                            }
-
-                            confirm_pwd := LineEdit {
-                                text <=> root.confirm_password;
-                                input-type: InputType.password;
-                                font-size: 12px;
-                                placeholder-text: root.is_vault_locked ? "Vault locked" : "Confirm new...";
-                                enabled: !root.is_vault_locked && !root.is_reencrypting;
-                            }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: start;
-
-                        Button {
-                            text: "Change Password";
-                            enabled: !root.is_vault_locked && !root.is_reencrypting && root.current_password != "" && root.new_password != "" && root.confirm_password != "";
-                            clicked => {
-                                root.change_password(root.current_password, root.new_password, root.confirm_password);
-                            }
-                        }
-
-                        if root.password_change_status != "" : Text {
-                            text: root.password_change_status;
-                            font-size: 11px;
-                            color: root.password_change_success ? Theme.success : Theme.danger;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-                    }
-
-                    if root.is_reencrypting : VerticalLayout {
-                        spacing: 4px;
-
-                        ProgressIndicator {
-                            progress: root.reencrypt_progress;
-                        }
-                    }
-                }
-            }
-
-            // Section 4: Manage Keyfile Box
-            Rectangle {
-                background: Theme.bg_secondary;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: Theme.border;
-                opacity: root.is_vault_locked ? 0.55 : 1.0;
-
-                VerticalLayout {
-                    padding: 14px;
-                    spacing: 10px;
-
-                    HorizontalLayout {
-                        spacing: 6px;
-                        alignment: start;
-                        cross-axis-alignment: center;
-
                         Text {
-                            text: "🔑 Manage Keyfile";
-                            font-size: 13px;
+                            text: "Vault Storage";
+                            font-size: Theme.font_sm;
                             font-weight: 700;
-                            color: Theme.text_primary;
-                            vertical-alignment: center;
+                            color: Theme.text_secondary;
                         }
-                    }
 
-                    if root.is_vault_locked : Text {
-                        text: "🔒 Vault is locked. Unlock the vault to manage the keyfile.";
-                        font-size: 11px;
-                        font-weight: 600;
-                        color: Theme.accent;
-                        wrap: word-wrap;
-                    }
-
-                    if !root.is_vault_locked : Text {
-                        text: "Adding or removing a keyfile will re-encrypt all notes. Keep your keyfile safe!";
-                        font-size: 11px;
-                        color: Theme.text_secondary;
-                        wrap: word-wrap;
-                    }
-
-                    HorizontalLayout {
-                        spacing: 8px;
-                        cross-axis-alignment: end;
-
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 3px;
+                        HorizontalLayout {
+                            spacing: Theme.space_sm;
+                            cross-axis-alignment: center;
 
                             Text {
-                                text: "Current Password";
-                                font-size: 11px;
-                                color: Theme.text_secondary;
+                                width: 160px;
+                                text: "Vault Directory:";
+                                font-size: Theme.font_md;
+                                color: Theme.text_primary;
+                                vertical-alignment: center;
                             }
 
                             LineEdit {
-                                text <=> root.keyfile_current_password;
-                                input-type: InputType.password;
-                                font-size: 12px;
-                                placeholder-text: root.is_vault_locked ? "Vault locked" : "Current password...";
-                                enabled: !root.is_vault_locked && !root.is_keyfile_reencrypting;
+                                height: Theme.input_height;
+                                text: root.vault_path;
+                                font-size: Theme.font_md;
+                                enabled: false;
+                                horizontal-stretch: 1;
                             }
+
+                            AppButton {
+                                text: "Browse...";
+                                variant: "secondary";
+                                clicked => {
+                                    root.browse_path_clicked();
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    // Section 2: Preferences (General, Hotkeys & Security Timers)
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            text: "Preferences";
+                            font-size: Theme.font_sm;
+                            font-weight: 700;
+                            color: Theme.text_secondary;
                         }
 
                         VerticalLayout {
-                            horizontal-stretch: 2;
-                            spacing: 3px;
+                            spacing: 6px;
 
-                            Text {
-                                text: "New Keyfile";
-                                font-size: 11px;
-                                color: Theme.text_secondary;
+                            CheckBox {
+                                text: "Use multi-core decryption";
+                                checked <=> root.use_multithreading;
                             }
 
-                            HorizontalLayout {
-                                spacing: 4px;
+                            CheckBox {
+                                text: "Minimize to tray icon";
+                                checked <=> root.minimize_to_tray;
+                            }
 
-                                LineEdit {
-                                    text: root.new_keyfile_path;
-                                    read-only: true;
-                                    font-size: 12px;
-                                    placeholder-text: root.is_vault_locked ? "Vault locked" : (root.remove_keyfile ? "Keyfile will be removed" : "Select keyfile...");
-                                    enabled: !root.is_vault_locked && !root.remove_keyfile && !root.is_keyfile_reencrypting;
-                                    horizontal-stretch: 1;
+                            CheckBox {
+                                text: "Launch at startup";
+                                checked <=> root.launch_at_startup;
+                            }
+                        }
+
+                        // Quick Search Hotkey row
+                        HorizontalLayout {
+                            spacing: Theme.space_sm;
+                            cross-axis-alignment: center;
+
+                            Text {
+                                width: 160px;
+                                text: "Quick Search Hotkey:";
+                                font-size: Theme.font_md;
+                                color: Theme.text_primary;
+                                vertical-alignment: center;
+                            }
+
+                            record_scope := FocusScope {
+                                horizontal-stretch: 1;
+                                height: Theme.input_height;
+
+                                key-pressed(event) => {
+                                    if root.is_recording_hotkey {
+                                        if event.text == Key.Escape {
+                                            root.is_recording_hotkey = false;
+                                            return accept;
+                                        }
+                                        let detected = root.record_key_event(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
+                                        if detected != "" {
+                                            root.global_hotkey = detected;
+                                            root.is_recording_hotkey = false;
+                                        }
+                                        return accept;
+                                    }
+                                    reject
                                 }
 
-                                Button {
-                                    text: "Browse...";
-                                    enabled: !root.is_vault_locked && !root.remove_keyfile && !root.is_keyfile_reencrypting;
-                                    clicked => {
-                                        root.browse_new_keyfile();
+                                Rectangle {
+                                    width: 100%;
+                                    height: 100%;
+                                    background: root.is_recording_hotkey ? Theme.bg_active : Theme.bg_secondary;
+                                    border-radius: Theme.radius_sm;
+                                    border-width: 1px;
+                                    border-color: root.is_recording_hotkey ? Theme.accent : Theme.border;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 6px;
+                                        spacing: 8px;
+                                        cross-axis-alignment: center;
+
+                                        Image {
+                                            source: @image-url("../assets/icons/search.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: root.is_recording_hotkey ? Theme.accent : Theme.text_secondary;
+                                        }
+
+                                        Text {
+                                            text: root.is_recording_hotkey ? "Press shortcut on keyboard (e.g. Shift+Space)..." : root.global_hotkey;
+                                            font-size: Theme.font_sm;
+                                            font-weight: root.is_recording_hotkey ? 600 : 700;
+                                            color: root.is_recording_hotkey ? Theme.accent : Theme.text_primary;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        if !root.is_recording_hotkey : Rectangle {
+                                            width: 60px;
+                                            height: 22px;
+                                            border-radius: 4px;
+                                            background: Theme.hover;
+
+                                            Text {
+                                                text: "Record";
+                                                font-size: Theme.font_xs;
+                                                font-weight: 600;
+                                                color: Theme.text_primary;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        if root.is_recording_hotkey : Rectangle {
+                                            width: 60px;
+                                            height: 22px;
+                                            border-radius: 4px;
+                                            background: Theme.danger;
+
+                                            Text {
+                                                text: "Cancel";
+                                                font-size: Theme.font_xs;
+                                                font-weight: 600;
+                                                color: Theme.danger_text;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.is_recording_hotkey = !root.is_recording_hotkey;
+                                            root.is_recording_main_hotkey = false;
+                                            if root.is_recording_hotkey {
+                                                record_scope.focus();
+                                            }
+                                        }
                                     }
                                 }
                             }
+
+                            AppButton {
+                                text: "Reset";
+                                variant: "secondary";
+                                clicked => {
+                                    root.global_hotkey = "Shift+Space";
+                                    root.is_recording_hotkey = false;
+                                }
+                            }
                         }
+
+                        // Main Window Hotkey row
+                        HorizontalLayout {
+                            spacing: Theme.space_sm;
+                            cross-axis-alignment: center;
+
+                            Text {
+                                width: 160px;
+                                text: "Main Window Hotkey:";
+                                font-size: Theme.font_md;
+                                color: Theme.text_primary;
+                                vertical-alignment: center;
+                            }
+
+                            record_main_scope := FocusScope {
+                                horizontal-stretch: 1;
+                                height: Theme.input_height;
+
+                                key-pressed(event) => {
+                                    if root.is_recording_main_hotkey {
+                                        if event.text == Key.Escape {
+                                            root.is_recording_main_hotkey = false;
+                                            return accept;
+                                        }
+                                        let detected = root.record_key_event(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
+                                        if detected != "" {
+                                            root.main_window_hotkey = detected;
+                                            root.is_recording_main_hotkey = false;
+                                        }
+                                        return accept;
+                                    }
+                                    reject
+                                }
+
+                                Rectangle {
+                                    width: 100%;
+                                    height: 100%;
+                                    background: root.is_recording_main_hotkey ? Theme.bg_active : Theme.bg_secondary;
+                                    border-radius: Theme.radius_sm;
+                                    border-width: 1px;
+                                    border-color: root.is_recording_main_hotkey ? Theme.accent : Theme.border;
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 6px;
+                                        spacing: 8px;
+                                        cross-axis-alignment: center;
+
+                                        Image {
+                                            source: @image-url("../assets/icons/layers.svg");
+                                            width: 14px;
+                                            height: 14px;
+                                            colorize: root.is_recording_main_hotkey ? Theme.accent : Theme.text_secondary;
+                                        }
+
+                                        Text {
+                                            text: root.is_recording_main_hotkey ? "Press shortcut on keyboard (e.g. Ctrl+Shift+Space)..." : root.main_window_hotkey;
+                                            font-size: Theme.font_sm;
+                                            font-weight: root.is_recording_main_hotkey ? 600 : 700;
+                                            color: root.is_recording_main_hotkey ? Theme.accent : Theme.text_primary;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+
+                                        if !root.is_recording_main_hotkey : Rectangle {
+                                            width: 60px;
+                                            height: 22px;
+                                            border-radius: 4px;
+                                            background: Theme.hover;
+
+                                            Text {
+                                                text: "Record";
+                                                font-size: Theme.font_xs;
+                                                font-weight: 600;
+                                                color: Theme.text_primary;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+
+                                        if root.is_recording_main_hotkey : Rectangle {
+                                            width: 60px;
+                                            height: 22px;
+                                            border-radius: 4px;
+                                            background: Theme.danger;
+
+                                            Text {
+                                                text: "Cancel";
+                                                font-size: Theme.font_xs;
+                                                font-weight: 600;
+                                                color: Theme.danger_text;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.is_recording_main_hotkey = !root.is_recording_main_hotkey;
+                                            root.is_recording_hotkey = false;
+                                            if root.is_recording_main_hotkey {
+                                                record_main_scope.focus();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            AppButton {
+                                text: "Reset";
+                                variant: "secondary";
+                                clicked => {
+                                    root.main_window_hotkey = "Control+Shift+Space";
+                                    root.is_recording_main_hotkey = false;
+                                }
+                            }
+                        }
+
+                        // Theme row
+                        HorizontalLayout {
+                            spacing: Theme.space_sm;
+                            cross-axis-alignment: center;
+                            alignment: start;
+
+                            Text {
+                                width: 160px;
+                                text: "Theme:";
+                                font-size: Theme.font_md;
+                                color: Theme.text_primary;
+                                vertical-alignment: center;
+                            }
+
+                            ComboBox {
+                                width: 180px;
+                                height: Theme.input_height;
+                                model: root.theme_options;
+                                current-value: root.theme;
+                                selected(val) => {
+                                    root.theme = val;
+                                    Theme.theme = val;
+                                    Theme.is_dark = (val != "light");
+                                    Palette.color-scheme = (val != "light") ? ColorScheme.dark : ColorScheme.light;
+                                    root.theme_changed(val);
+                                }
+                            }
+                        }
+
+                        // Auto-Lock row
+                        HorizontalLayout {
+                            spacing: Theme.space_sm;
+                            cross-axis-alignment: center;
+                            alignment: start;
+
+                            Text {
+                                width: 160px;
+                                text: "Auto-Lock (Inactivity):";
+                                font-size: Theme.font_md;
+                                color: Theme.text_primary;
+                                vertical-alignment: center;
+                            }
+
+                            ComboBox {
+                                width: 180px;
+                                height: Theme.input_height;
+                                model: root.auto_lock_options;
+                                current-value: root.auto_lock;
+                                selected(val) => {
+                                    root.auto_lock = val;
+                                }
+                            }
+                        }
+
+                        // Clear Clipboard row
+                        HorizontalLayout {
+                            spacing: Theme.space_sm;
+                            cross-axis-alignment: center;
+                            alignment: start;
+
+                            Text {
+                                width: 160px;
+                                text: "Clear Clipboard:";
+                                font-size: Theme.font_md;
+                                color: Theme.text_primary;
+                                vertical-alignment: center;
+                            }
+
+                            ComboBox {
+                                width: 180px;
+                                height: Theme.input_height;
+                                model: root.clipboard_clear_options;
+                                current-value: root.clipboard_clear;
+                                selected(val) => {
+                                    root.clipboard_clear = val;
+                                }
+                            }
+                        }
+                    }
+
+                    // Section 3: Password Change Box
+                    Rectangle {
+                        background: Theme.bg_secondary;
+                        border-radius: Theme.radius_md;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        opacity: root.is_vault_locked ? 0.55 : 1.0;
 
                         VerticalLayout {
-                            alignment: end;
-                            padding-bottom: 6px;
+                            padding: 16px;
+                            spacing: 10px;
 
-                            CheckBox {
-                                text: "Remove Keyfile";
-                                checked <=> root.remove_keyfile;
-                                enabled: !root.is_vault_locked && !root.is_keyfile_reencrypting;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                cross-axis-alignment: center;
+
+                                Image {
+                                    source: @image-url("../assets/icons/lock.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.accent;
+                                }
+
+                                Text {
+                                    text: "Change Master Password";
+                                    font-size: Theme.font_md;
+                                    font-weight: 700;
+                                    color: Theme.text_primary;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            if root.is_vault_locked : HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                cross-axis-alignment: center;
+
+                                Image {
+                                    source: @image-url("../assets/icons/lock.svg");
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Theme.accent;
+                                }
+
+                                Text {
+                                    text: "Vault is locked. Unlock the vault to change the master password.";
+                                    font-size: Theme.font_xs;
+                                    font-weight: 600;
+                                    color: Theme.accent;
+                                    wrap: word-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+
+                            if !root.is_vault_locked : Text {
+                                text: "Changing your master password will re-encrypt all notes with the new password.";
+                                font-size: Theme.font_xs;
+                                color: Theme.text_secondary;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Theme.space_sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+
+                                    Text {
+                                        text: "Current Password";
+                                        font-size: Theme.font_xs;
+                                        color: Theme.text_secondary;
+                                    }
+
+                                    cur_pwd := LineEdit {
+                                        height: Theme.input_height;
+                                        text <=> root.current_password;
+                                        input-type: InputType.password;
+                                        font-size: Theme.font_sm;
+                                        placeholder-text: root.is_vault_locked ? "Vault locked" : "Current password...";
+                                        enabled: !root.is_vault_locked && !root.is_reencrypting;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+
+                                    Text {
+                                        text: "New Password";
+                                        font-size: Theme.font_xs;
+                                        color: Theme.text_secondary;
+                                    }
+
+                                    new_pwd := LineEdit {
+                                        height: Theme.input_height;
+                                        text <=> root.new_password;
+                                        input-type: InputType.password;
+                                        font-size: Theme.font_sm;
+                                        placeholder-text: root.is_vault_locked ? "Vault locked" : "New password...";
+                                        enabled: !root.is_vault_locked && !root.is_reencrypting;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+
+                                    Text {
+                                        text: "Confirm New";
+                                        font-size: Theme.font_xs;
+                                        color: Theme.text_secondary;
+                                    }
+
+                                    confirm_pwd := LineEdit {
+                                        height: Theme.input_height;
+                                        text <=> root.confirm_password;
+                                        input-type: InputType.password;
+                                        font-size: Theme.font_sm;
+                                        placeholder-text: root.is_vault_locked ? "Vault locked" : "Confirm new...";
+                                        enabled: !root.is_vault_locked && !root.is_reencrypting;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                cross-axis-alignment: center;
+
+                                AppButton {
+                                    text: "Change Password";
+                                    variant: "secondary";
+                                    enabled: !root.is_vault_locked && !root.is_reencrypting && root.current_password != "" && root.new_password != "" && root.confirm_password != "";
+                                    clicked => {
+                                        root.change_password(root.current_password, root.new_password, root.confirm_password);
+                                    }
+                                }
+
+                                if root.password_change_status != "" : Text {
+                                    text: root.password_change_status;
+                                    font-size: Theme.font_xs;
+                                    color: root.password_change_success ? Theme.success : Theme.danger;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+
+                            if root.is_reencrypting : ProgressIndicator {
+                                progress: root.reencrypt_progress;
                             }
                         }
                     }
 
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: start;
+                    // Section 4: Manage Keyfile Box
+                    Rectangle {
+                        background: Theme.bg_secondary;
+                        border-radius: Theme.radius_md;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        opacity: root.is_vault_locked ? 0.55 : 1.0;
 
-                        Button {
-                            text: "Update Keyfile";
-                            enabled: !root.is_vault_locked &&
-                                     !root.is_keyfile_reencrypting &&
-                                     root.keyfile_current_password != "" &&
-                                     ((root.new_keyfile_path != "" && !root.remove_keyfile) || root.remove_keyfile);
-                            clicked => {
-                                root.update_keyfile(root.keyfile_current_password, root.new_keyfile_path, root.remove_keyfile);
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 10px;
+
+                            HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                cross-axis-alignment: center;
+
+                                Image {
+                                    source: @image-url("../assets/icons/lock.svg");
+                                    width: 14px;
+                                    height: 14px;
+                                    colorize: Theme.accent;
+                                }
+
+                                Text {
+                                    text: "Manage Keyfile";
+                                    font-size: Theme.font_md;
+                                    font-weight: 700;
+                                    color: Theme.text_primary;
+                                    vertical-alignment: center;
+                                }
                             }
-                        }
 
-                        if root.keyfile_status != "" : Text {
-                            text: root.keyfile_status;
-                            font-size: 11px;
-                            color: root.keyfile_success ? Theme.success : Theme.danger;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-                    }
+                            if root.is_vault_locked : HorizontalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                cross-axis-alignment: center;
 
-                    if root.is_keyfile_reencrypting : VerticalLayout {
-                        spacing: 4px;
+                                Image {
+                                    source: @image-url("../assets/icons/lock.svg");
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Theme.accent;
+                                }
 
-                        ProgressIndicator {
-                            progress: root.keyfile_reencrypt_progress;
+                                Text {
+                                    text: "Vault is locked. Unlock the vault to manage the keyfile.";
+                                    font-size: Theme.font_xs;
+                                    font-weight: 600;
+                                    color: Theme.accent;
+                                    wrap: word-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+
+                            if !root.is_vault_locked : Text {
+                                text: "Adding or removing a keyfile will re-encrypt all notes. Keep your keyfile safe!";
+                                font-size: Theme.font_xs;
+                                color: Theme.text_secondary;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Theme.space_sm;
+                                cross-axis-alignment: end;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+
+                                    Text {
+                                        text: "Current Password";
+                                        font-size: Theme.font_xs;
+                                        color: Theme.text_secondary;
+                                    }
+
+                                    LineEdit {
+                                        height: Theme.input_height;
+                                        text <=> root.keyfile_current_password;
+                                        input-type: InputType.password;
+                                        font-size: Theme.font_sm;
+                                        placeholder-text: root.is_vault_locked ? "Vault locked" : "Current password...";
+                                        enabled: !root.is_vault_locked && !root.is_keyfile_reencrypting;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 2;
+                                    spacing: 4px;
+
+                                    Text {
+                                        text: "New Keyfile";
+                                        font-size: Theme.font_xs;
+                                        color: Theme.text_secondary;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        cross-axis-alignment: center;
+
+                                        LineEdit {
+                                            height: Theme.input_height;
+                                            text: root.new_keyfile_path;
+                                            read-only: true;
+                                            font-size: Theme.font_sm;
+                                            placeholder-text: root.is_vault_locked ? "Vault locked" : (root.remove_keyfile ? "Keyfile will be removed" : "Select keyfile...");
+                                            enabled: !root.is_vault_locked && !root.remove_keyfile && !root.is_keyfile_reencrypting;
+                                            horizontal-stretch: 1;
+                                        }
+
+                                        AppButton {
+                                            text: "Browse...";
+                                            variant: "secondary";
+                                            enabled: !root.is_vault_locked && !root.remove_keyfile && !root.is_keyfile_reencrypting;
+                                            clicked => {
+                                                root.browse_new_keyfile();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: start;
+                                cross-axis-alignment: center;
+
+                                AppButton {
+                                    text: "Update Keyfile";
+                                    variant: "secondary";
+                                    enabled: !root.is_vault_locked &&
+                                             !root.is_keyfile_reencrypting &&
+                                             root.keyfile_current_password != "" &&
+                                             ((root.new_keyfile_path != "" && !root.remove_keyfile) || root.remove_keyfile);
+                                    clicked => {
+                                        root.update_keyfile(root.keyfile_current_password, root.new_keyfile_path, root.remove_keyfile);
+                                    }
+                                }
+
+                                CheckBox {
+                                    text: "Remove Keyfile";
+                                    checked <=> root.remove_keyfile;
+                                    enabled: !root.is_vault_locked && !root.is_keyfile_reencrypting;
+                                }
+
+                                if root.keyfile_status != "" : Text {
+                                    text: root.keyfile_status;
+                                    font-size: Theme.font_xs;
+                                    color: root.keyfile_success ? Theme.success : Theme.danger;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                            }
+
+                            if root.is_keyfile_reencrypting : ProgressIndicator {
+                                progress: root.keyfile_reencrypt_progress;
+                            }
                         }
                     }
                 }
             }
 
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
 
-            // Footer Action Buttons
-            HorizontalLayout {
-                spacing: 10px;
+            // Pinned Footer Action Buttons
+            footer_box := HorizontalLayout {
+                padding-top: 14px;
+                padding-bottom: 14px;
+                padding-left: Theme.modal_pad_x;
+                padding-right: Theme.modal_pad_x;
+                spacing: Theme.space_sm;
                 alignment: end;
 
-                Button {
-                    text: "Close";
+                AppButton {
+                    text: "Cancel";
+                    variant: "secondary";
+                    enabled: !root.is_reencrypting && !root.is_keyfile_reencrypting;
                     clicked => {
-                        root.close_clicked();
                         root.is_recording_hotkey = false;
                         root.is_recording_main_hotkey = false;
+                        root.close_clicked();
                     }
                 }
 
-                Button {
+                AppButton {
                     text: "Save Settings";
-                    primary: true;
+                    variant: "primary";
+                    enabled: !root.is_reencrypting && !root.is_keyfile_reencrypting;
                     clicked => {
-                        root.save_settings(root.vault_path, root.use_multithreading, root.theme, root.global_hotkey, root.main_window_hotkey, root.minimize_to_tray, root.launch_at_startup);
+                        root.save_settings(root.vault_path, root.use_multithreading, root.theme, root.global_hotkey, root.main_window_hotkey, root.minimize_to_tray, root.launch_at_startup, root.auto_lock, root.clipboard_clear);
                     }
                 }
             }

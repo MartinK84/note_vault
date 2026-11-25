@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{decrypt_bytes, encrypt_bytes, VaultError};
 
@@ -50,6 +50,14 @@ impl Zeroize for NoteAttachment {
         self.data.zeroize();
     }
 }
+
+impl Drop for NoteAttachment {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for NoteAttachment {}
 
 /// Serializes an attachment into a compact binary payload:
 /// `[Header Len (4B, big-endian u32)] + [JSON Header (AttachmentMetadata)] + [Raw Data Bytes]`
@@ -108,21 +116,17 @@ pub fn deserialize_attachment_metadata(decrypted: &[u8]) -> Result<AttachmentMet
     Ok(meta)
 }
 
-/// Encrypts and saves an attachment to disk using the cryptographic cascade (Version 0x02).
+/// Encrypts and atomically saves an attachment to disk using the cryptographic cascade.
 pub fn save_attachment_encrypted(
     attachment: &NoteAttachment,
     password: &str,
     keyfile_bytes: Option<&[u8]>,
     output_path: &Path,
 ) -> Result<(), Box<dyn Error>> {
-    let payload = serialize_attachment(attachment)?;
-    let encrypted = encrypt_bytes(&payload, password, keyfile_bytes)?;
-    if let Some(parent) = output_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    fs::write(output_path, &encrypted)?;
+    let payload = Zeroizing::new(serialize_attachment(attachment)?);
+    let encrypted = encrypt_bytes(payload.as_slice(), password, keyfile_bytes)?;
+    drop(payload);
+    crate::atomic_write(output_path, &encrypted)?;
     Ok(())
 }
 
@@ -281,8 +285,8 @@ pub fn load_canvas_decrypted(
     keyfile_bytes: Option<&[u8]>,
     input_path: &Path,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    let attachment = load_attachment_decrypted(password, keyfile_bytes, input_path)?;
-    Ok(attachment.data)
+    let mut attachment = load_attachment_decrypted(password, keyfile_bytes, input_path)?;
+    Ok(std::mem::take(&mut attachment.data))
 }
 
 /// Moves all attachment files of a note when the note itself is moved to a new path.
